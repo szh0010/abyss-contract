@@ -9,15 +9,29 @@ from app.data.story_scripts import ALL_STAGES
 from app.schemas.game import GameStageResponse, ChoiceResult
 
 
+ABYSS_ENDING_TEXT = (
+    "\n\n"
+    "====================\n\n"
+    "（你听到远处传来警笛声。不，那不是来救你的。）\n"
+    "（你的手机屏幕亮了：您的账户已被冻结）\n"
+    "（K 的笑容在黑暗中渐渐消失。）\n"
+    "（从始至终，你都只是棋盘上的一枚棋子。）\n\n"
+    "【深渊结局：万劫不复】"
+)
+
+REBIRTH_ENDING_TEXT = (
+    "\n\n"
+    "====================\n\n"
+    "（K 沉默了很久。）\n"
+    "（他站起身，拿起那件黑色外套，头也不回地走了。）\n"
+    "（窗外，天亮了。你拨通了法律援助热线。）\n"
+    "（这条路会很长，但至少——你还站在路上。）\n\n"
+    "【新生结局：破晓之光】"
+)
+
+
 class GameEngine:
-    """游戏核心引擎
-    规则:
-    1. 选择赌博 -> 贪婪值上升 + 债务暴涨
-    2. 选择拒绝 -> 贪婪值下降 + 债务缓慢减少
-    3. 贪婪值 >= 80 -> K 切换高压话术
-    4. 累计赌博 >= 4 -> 强制深渊结局
-    5. 通过所有阶段且贪婪值 < 50 -> 新生结局
-    """
+    """游戏核心引擎"""
 
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -90,7 +104,6 @@ class GameEngine:
         ending = None
         next_stage = player.current_stage + 1
 
-        # 深渊结局
         if (player.greed_value >= settings.MAX_GREED
                 or player.total_gamble_count >= 4
                 or player.debt >= 2000000):
@@ -99,46 +112,14 @@ class GameEngine:
             player.is_fallen = True
             player.ending_type = "abyss"
             next_stage = None
-            k_response += (
-                "
+            k_response += ABYSS_ENDING_TEXT
 
-" + "=" * 20 + "
-
-"
-                "（你听到远处传来警笛声。不，那不是来救你的。）
-"
-                "（你的手机屏幕亮了：您的账户已被冻结）
-"
-                "（K 的笑容在黑暗中渐渐消失。）
-"
-                "（从始至终，你都只是棋盘上的一枚棋子。）
-
-"
-                "【深渊结局：万劫不复】"
-            )
-        # 新生结局
         elif next_stage > len(ALL_STAGES) and player.greed_value < 50:
             is_game_over = True
             ending = "rebirth"
             player.ending_type = "rebirth"
             next_stage = None
-            k_response += (
-                "
-
-" + "=" * 20 + "
-
-"
-                "（K 沉默了很久。）
-"
-                "（他站起身，拿起那件黑色外套，头也不回地走了。）
-"
-                "（窗外，天亮了。你拨通了法律援助热线。）
-"
-                "（这条路会很长，但至少——你还站在路上。）
-
-"
-                "【新生结局：破晓之光】"
-            )
+            k_response += REBIRTH_ENDING_TEXT
         else:
             player.current_stage = next_stage
 

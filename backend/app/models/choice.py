@@ -1,8 +1,12 @@
-import uuid
-from datetime import datetime
+﻿import uuid
+from datetime import datetime, timezone
 from sqlalchemy import String, Integer, DateTime, ForeignKey, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
+
+
+def utcnow():
+    return datetime.now(timezone.utc)
 
 
 class ChoiceRecord(Base):
@@ -28,9 +32,7 @@ class ChoiceRecord(Base):
 
     k_response: Mapped[str] = mapped_column(Text)
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default_factory=datetime.utcnow
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     def __repr__(self) -> str:
         return f"<Choice @ Stage {self.stage_number} | {self.choice}>"

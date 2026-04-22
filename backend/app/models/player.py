@@ -1,8 +1,12 @@
-import uuid
-from datetime import datetime
+﻿import uuid
+from datetime import datetime, timezone
 from sqlalchemy import String, Integer, Boolean, DateTime
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
+
+
+def utcnow():
+    return datetime.now(timezone.utc)
 
 
 class PlayerSession(Base):
@@ -31,12 +35,8 @@ class PlayerSession(Base):
     total_refuse_count: Mapped[int] = mapped_column(Integer, default=0)
 
     # 时间戳
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default_factory=datetime.utcnow
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default_factory=datetime.utcnow, onupdate=datetime.utcnow
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
     def __repr__(self) -> str:
         return f"<Player {self.player_name} | debt:{self.debt} | greed:{self.greed_value}>"
