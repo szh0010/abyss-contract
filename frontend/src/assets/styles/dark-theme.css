@@ -1,0 +1,70 @@
+/* 深渊契约 - 暗黑主题 */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  --abyss-black: #0a0a0f;
+  --abyss-dark: #12121a;
+  --abyss-gray: #1a1a2e;
+  --abyss-border: #2a2a3e;
+  --abyss-red: #c0392b;
+  --abyss-red-glow: #e74c3c;
+  --abyss-gold: #d4a017;
+  --abyss-gold-dim: #b8860b;
+  --abyss-green: #27ae60;
+  --text-primary: #e0e0e0;
+  --text-secondary: #8a8a9a;
+  --text-danger: #e74c3c;
+  --text-warning: #f39c12;
+}
+
+body {
+  font-family: "Noto Serif SC", "STSongti-SC", "SimSun", serif;
+  background-color: var(--abyss-black);
+  color: var(--text-primary);
+  min-height: 100vh;
+  line-height: 1.8;
+  overflow-x: hidden;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background:
+    radial-gradient(ellipse at 20% 50%, rgba(192, 57, 43, 0.05) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 50%, rgba(41, 128, 185, 0.03) 0%, transparent 50%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+#app {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+}
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--abyss-dark); }
+::-webkit-scrollbar-thumb { background: var(--abyss-border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--abyss-red); }
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes glowPulse {
+  0%, 100% { box-shadow: 0 0 5px rgba(192, 57, 43, 0.3); }
+  50% { box-shadow: 0 0 20px rgba(192, 57, 43, 0.6); }
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
