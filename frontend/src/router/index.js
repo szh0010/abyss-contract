@@ -10,6 +10,14 @@ const routes = [
     path: '/game',
     name: 'Game',
     component: () => import('../views/GameView.vue'),
+    beforeEnter: (to, from, next) => {
+      // Prevent direct access without going through intro
+      if (!from.name && !sessionStorage.getItem('abyss_player_name')) {
+        next('/')
+      } else {
+        next()
+      }
+    },
   },
 ]
 
