@@ -3,21 +3,22 @@ import { createRouter, createWebHistory } from 'vue-router'
 const routes = [
   {
     path: '/',
-    name: 'Home',
-    component: () => import('../views/HomeView.vue'),
+    name: 'Intro',
+    component: () => import('../views/IntroView.vue'),
   },
   {
     path: '/game',
     name: 'Game',
     component: () => import('../views/GameView.vue'),
-    beforeEnter: (to, from, next) => {
-      // Prevent direct access without going through intro
-      if (!from.name && !sessionStorage.getItem('abyss_player_name')) {
-        next('/')
-      } else {
-        next()
-      }
-    },
+  },
+  {
+    path: '/home',
+    name: 'Home',
+    component: () => import('../views/HomeView.vue'),
+  },
+  {
+    path: '/:pathMatch(.*)*',
+    redirect: '/',
   },
 ]
 

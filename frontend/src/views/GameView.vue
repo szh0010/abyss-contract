@@ -1,5 +1,80 @@
 ﻿<template>
-  <div class="game-page" :class="dangerClass">
+  <div class="game-page" :class="[dangerClass, stageThemeClass]">
+    <!-- Glitch 故障转场层 -->
+    <div class="glitch-overlay" v-if="showGlitch">
+      <div class="glitch-bar glitch-bar-1"></div>
+      <div class="glitch-bar glitch-bar-2"></div>
+      <div class="glitch-bar glitch-bar-3"></div>
+      <div class="glitch-text" data-text="SYSTEM ERROR">SYSTEM ERROR</div>
+    </div>
+
+    <!-- 呼吸灯边框（stage_trap 阶段） -->
+    <div class="pressure-border" v-if="gameStage === 'stage_trap'"></div>
+
+    <!-- 借款弹窗 -->
+    <LoanDialog :visible="showLoanDialog" @accept="onAcceptLoan" />
+
+    <!-- 终局冻结 -->
+    <FrozenScreen :visible="showFrozenScreen" @restart="restartGame" />
+
+    <!-- ========== 规则说明弹窗（首次进入扑克） ========== -->
+    <transition name="rules-fade">
+      <div v-if="showRules" class="rules-overlay" @click.self="closeRules">
+        <div class="rules-box">
+          <div class="rules-header">
+            <span class="rules-icon">♠</span>
+            <h2 class="rules-title">印第安扑克 · 规则速览</h2>
+            <span class="rules-icon">♦</span>
+          </div>
+
+          <div class="rules-body">
+            <div class="rule-item">
+              <span class="rule-num">01</span>
+              <div class="rule-content">
+                <p class="rule-title">看得见对方，看不见自己</p>
+                <p class="rule-desc">你和 K 各抽一张牌贴在额头上。你能看到 K 的牌，但看不到自己的。</p>
+              </div>
+            </div>
+
+            <div class="rule-item">
+              <span class="rule-num">02</span>
+              <div class="rule-content">
+                <p class="rule-title">1 最小，10 最大</p>
+                <p class="rule-desc">牌面数字 1-10，摊牌后数字大的赢得底池。</p>
+              </div>
+            </div>
+
+            <div class="rule-item">
+              <span class="rule-num">03</span>
+              <div class="rule-content">
+                <p class="rule-title">三种操作</p>
+                <p class="rule-desc">
+                  <span class="op-tag op-call">跟 注</span> 不加钱，等对方决定 ·
+                  <span class="op-tag op-raise">加 注</span> 加筹码施压对方 ·
+                  <span class="op-tag op-fold">弃 牌</span> 放弃本局，输掉底池
+                </p>
+              </div>
+            </div>
+
+            <div class="rule-item">
+              <span class="rule-num">04</span>
+              <div class="rule-content">
+                <p class="rule-title">开牌时机</p>
+                <p class="rule-desc">一方选择<b>跟注</b>时立刻开牌比大小，弃牌则直接结算。</p>
+              </div>
+            </div>
+
+            <div class="rule-tip">
+              💡 核心：你只能通过<b class="tip-highlight">K 的牌大小</b>和<b class="tip-highlight">他的下注行为</b>推测自己的牌。
+            </div>
+          </div>
+
+          <button class="rules-btn" @click="closeRules">
+            明 白 了 · 开 始 游 戏
+          </button>
+        </div>
+      </div>
+    </transition>
     <!-- ========== VN MODE: 剧本对话 ========== -->
     <template v-if="mode === 'vn'">
       <header class="game-header">
@@ -12,7 +87,7 @@
       <div class="status-board" v-if="currentNode && !currentNode.ending">
         <div class="stat-box">
           <span class="stat-label">债 务</span>
-          <span class="stat-value debt-value">¥ {{ debt.toLocaleString() }}</span>
+          <span class="stat-value debt-value">¥ {{ vnDebt.toLocaleString() }}</span>
         </div>
         <div class="stat-divider"></div>
         <div class="stat-box">
@@ -57,15 +132,27 @@
     <!-- ========== POKER MODE: 印第安扑克 ========== -->
     <template v-if="mode === 'poker'">
       <header class="game-header poker-header">
-        <h1 class="game-logo">印第安扑克</h1>
-        <span class="round-badge">第 {{ pokerRound }} 局</span>
+        <h1 class="game-logo">{{ stageTitle || '印第安扑克' }}</h1>
+        <div class="header-right-poker">
+          <span class="stage-badge" :class="'badge-' + gameStage">{{ stageShortName }}</span>
+          <span class="round-badge">第 {{ pokerRound }} 局</span>
+        </div>
       </header>
+
+      <!-- 阶段提示条 -->
+      <div class="stage-hint-bar" v-if="stageHint" :class="'hint-' + gameStage">
+        {{ stageHint }}
+      </div>
 
       <div class="poker-board">
         <div class="poker-status">
           <div class="chips-box player-chips-box">
             <span class="chips-label">你的筹码</span>
             <span class="chips-value player-color">¥{{ playerChips.toLocaleString() }}</span>
+            <!-- 负债显示（CONTRACT 阶段后出现） -->
+            <span class="debt-display" v-if="debt > 0">
+              负债: -¥{{ debt.toLocaleString() }}
+            </span>
           </div>
           <div class="pot-box">
             <span class="pot-label">底 池</span>
@@ -108,11 +195,12 @@
 
         <div class="poker-actions" v-if="!pokerRoundOver && !pokerLoading && pokerStarted">
           <button class="poker-btn fold-btn" @click="pokerAction('fold')">弃 牌</button>
-          <button class="poker-btn call-btn" @click="pokerAction('call')">跟 注</button>
+          <button class="poker-btn call-btn" @click="pokerAction('call')" :disabled="playerChips <= 0">跟 注</button>
           <div class="raise-group">
-            <input type="number" v-model.number="raiseAmount" min="1000" :max="Math.min(playerChips, kChips)" step="1000" class="raise-input"/>
-            <button class="poker-btn raise-btn" @click="pokerAction('raise')" :disabled="raiseAmount < 1000">加 注</button>
+            <input type="number" v-model.number="raiseAmount" min="1000" :max="maxRaise" step="1000" class="raise-input" :disabled="playerChips <= 0"/>
+            <button class="poker-btn raise-btn" @click="pokerAction('raise')" :disabled="raiseAmount < 1000 || playerChips <= 0 || raiseAmount > maxRaise">加 注</button>
           </div>
+          <span class="chips-warn" v-if="playerChips <= 2000">⚠ 筹码即将耗尽</span>
         </div>
 
         <div class="poker-actions" v-if="!pokerStarted && !pokerLoading">
@@ -158,14 +246,46 @@
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import storyData from '../data/story.json'
+import LoanDialog from '../components/LoanDialog.vue'
+import FrozenScreen from '../components/FrozenScreen.vue'
 
 const router = useRouter()
 
 // ===== 模式控制 =====
-const mode = ref('vn')  // 'vn' | 'poker'
+const mode = ref('poker')  // 直接进入扑克模式测试新架构
+
+// ===== 状态机核心变量 =====
+const gameStage = ref('stage_bait')
+const stageTitle = ref('序曲：新手福利')
+const stageHint = ref('前3局必赢，体验赚钱的快感！')
+const baitWins = ref(0)
+const hookRounds = ref(0)
+const debt = ref(0)
+const loanAccepted = ref(false)
+const showLoanDialog = ref(false)
+const showFrozenScreen = ref(false)
+const showGlitch = ref(false)
+const showRules = ref(true)  // 首次进入显示规则
+
+function closeRules() {
+  showRules.value = false
+}
+
+const stageShortName = computed(() => {
+  const m = {
+    stage_bait: '序曲',
+    stage_hook: '第一幕',
+    stage_trap: '第二幕',
+    stage_contract: '第三幕',
+    stage_verdict: '终局',
+  }
+  return m[gameStage.value] || ''
+})
+
+const stageThemeClass = computed(() => `theme-${gameStage.value}`)
 
 // ===== VN 状态 =====
-const debt = ref(500000)
+const vnDebt = ref(500000)
 const greed = ref(0)
 const currentNodeId = ref(storyData.meta.initial_node)
 const currentNode = computed(() => storyData.nodes[currentNodeId.value] || null)
@@ -268,18 +388,30 @@ const pokerGameOver = ref(false)
 const roundWinner = ref('')
 const actionLog = ref([])
 
+const maxRaise = computed(() => Math.max(0, Math.min(playerChips.value, kChips.value)))
+
 function initPoker() {
   pokerRound.value = 0
-  playerChips.value = 50000
+  playerChips.value = 10000  // stage_bait 初始筹码
   kChips.value = 50000
   pot.value = 0
   playerCard.value = 0
   kCard.value = 0
-  kTaunt.value = '（K洗着牌，指间的纸牌翻飞如蝶）准备好了？'
+  kTaunt.value = '（K在远处看着你，嘴角微扬）先从小的玩起，热热身。'
   pokerStarted.value = false
   pokerRoundOver.value = false
   pokerGameOver.value = false
   actionLog.value = []
+  // 状态机重置
+  gameStage.value = 'stage_bait'
+  stageTitle.value = '序曲：新手福利'
+  stageHint.value = '前3局必赢，体验赚钱的快感！'
+  baitWins.value = 0
+  hookRounds.value = 0
+  debt.value = 0
+  loanAccepted.value = false
+  showLoanDialog.value = false
+  showFrozenScreen.value = false
 }
 
 async function dealCards() {
@@ -296,19 +428,45 @@ async function dealCards() {
       body: JSON.stringify({
         player_chips: playerChips.value,
         k_chips: kChips.value,
+        game_stage: gameStage.value,
+        bait_wins: baitWins.value,
+        hook_rounds: hookRounds.value,
       })
     })
+
+    if (!res.ok) {
+      // 后端拒绝发牌（通常是筹码耗尽）
+      const errData = await res.json().catch(() => ({}))
+      console.warn('[发牌被拒]', errData)
+      // 如果玩家筹码为 0 且在 trap 或更后的阶段，触发套路贷
+      if (playerChips.value <= 0 && (gameStage.value === 'stage_trap' || gameStage.value === 'stage_hook')) {
+        gameStage.value = 'stage_contract'
+        stageTitle.value = '第三幕：最后的机会'
+        stageHint.value = '接受借款，翻本在此一举'
+        showLoanDialog.value = true
+        pokerLoading.value = false
+        return
+      }
+      kTaunt.value = '（K 冷笑）你连发牌的筹码都没有了。'
+      pokerLoading.value = false
+      return
+    }
+
     const data = await res.json()
 
     pokerRound.value++
     playerCard.value = data.player_card
     kCard.value = data.k_card
     pot.value = data.pot
-    playerChips.value = data.player_chips
-    kChips.value = data.k_chips
+    playerChips.value = data.player_chips ?? playerChips.value
+    kChips.value = data.k_chips ?? kChips.value
     pokerStarted.value = true
     kTaunt.value = '牌已发出。看看我头上是什么？'
-    actionLog.value.push({ role: 'system', text: `第 ${pokerRound.value} 局开始 | 底注各 1000 | 底池 ${data.pot}` })
+    // 同步阶段信息
+    if (data.game_stage) gameStage.value = data.game_stage
+    if (data.stage_title) stageTitle.value = data.stage_title
+    if (data.stage_hint) stageHint.value = data.stage_hint
+    actionLog.value.push({ role: 'system', text: `第 ${pokerRound.value} 局开始 | 底注各 ${data.ante} | 底池 ${data.pot}` })
   } catch (e) {
     console.error(e)
     kTaunt.value = '（系统错误——牌局连接中断）'
@@ -320,7 +478,23 @@ async function dealCards() {
 async function pokerAction(action) {
   pokerLoading.value = true
 
-  const bet = action === 'raise' ? Math.max(1000, raiseAmount.value) : 0
+  // 限制下注不超过玩家筹码
+  let bet = 0
+  if (action === 'raise') {
+    bet = Math.max(1000, Math.min(raiseAmount.value, playerChips.value, kChips.value))
+    if (bet > playerChips.value || playerChips.value < 1000) {
+      pokerLoading.value = false
+      kTaunt.value = '你的筹码不够加注了。'
+      return
+    }
+  }
+
+  // 筹码不足时强制拒绝操作（双重保险）
+  if ((action === 'call' || action === 'raise') && playerChips.value <= 0) {
+    pokerLoading.value = false
+    kTaunt.value = '你已经没有筹码了。'
+    return
+  }
 
   if (action === 'fold') {
     actionLog.value.push({ role: 'player', text: '你弃牌了' })
@@ -338,12 +512,16 @@ async function pokerAction(action) {
         round_id: pokerRound.value,
         player_card: playerCard.value,
         k_card: kCard.value,
-        pot: action === 'raise' ? pot.value + bet : pot.value,
-        player_chips: action === 'raise' ? playerChips.value - bet : playerChips.value,
+        pot: pot.value,
+        player_chips: playerChips.value,
         k_chips: kChips.value,
         player_action: action,
         player_bet: bet,
         round_history: actionLog.value.map(l => l.text),
+        game_stage: gameStage.value,
+        bait_wins: baitWins.value,
+        hook_rounds: hookRounds.value,
+        loan_accepted: loanAccepted.value,
       })
     })
     const data = await res.json()
@@ -353,13 +531,40 @@ async function pokerAction(action) {
     playerChips.value = data.player_chips
     kChips.value = data.k_chips
 
-    if (data.k_action === 'raise') {
+    // ===== 状态机字段同步 =====
+    if (data.bait_wins !== undefined) baitWins.value = data.bait_wins
+    if (data.hook_rounds !== undefined) hookRounds.value = data.hook_rounds
+
+    // ===== 阶段流转处理 =====
+    if (data.stage_changed && data.game_stage !== gameStage.value) {
+      const oldStage = gameStage.value
+      const newStage = data.game_stage
+
+      // 进入 stage_hook：触发 Glitch 故障特效
+      if (newStage === 'stage_hook') {
+        await triggerGlitchTransition()
+      }
+
+      gameStage.value = newStage
+      if (data.stage_title) stageTitle.value = data.stage_title
+      if (data.stage_hint) stageHint.value = data.stage_hint
+
+      // 进入 stage_contract：弹出借款协议
+      if (newStage === 'stage_contract') {
+        await nextTick()
+        setTimeout(() => {
+          showLoanDialog.value = true
+        }, 800)
+      }
+    }
+
+    if (data.k_action === 'RAISE' || data.k_action === 'raise') {
       actionLog.value.push({ role: 'k', text: `K 加注 ¥${data.k_bet.toLocaleString()}` })
-    } else if (data.k_action === 'call') {
+    } else if (data.k_action === 'CALL' || data.k_action === 'call') {
       actionLog.value.push({ role: 'k', text: 'K 跟注' })
-    } else if (data.k_action === 'fold') {
+    } else if (data.k_action === 'FOLD' || data.k_action === 'fold') {
       actionLog.value.push({ role: 'k', text: 'K 弃牌' })
-    } else if (data.k_action === 'win') {
+    } else if (data.k_action === 'WIN' || data.k_action === 'win') {
       actionLog.value.push({ role: 'k', text: 'K 获胜（你弃牌）' })
     }
 
@@ -367,9 +572,24 @@ async function pokerAction(action) {
       pokerRoundOver.value = true
       roundWinner.value = data.winner
       pokerStarted.value = false
+    }
 
-      if (playerChips.value <= 0 || kChips.value <= 0) {
-        pokerGameOver.value = true
+    // 破产判定（后端返回的 game_over 字段）
+    if (data.game_over) {
+      pokerGameOver.value = true
+      pokerRoundOver.value = true
+      pokerStarted.value = false
+      // 筹码强制归零显示
+      if (data.game_over_reason === 'player_bankrupt') {
+        playerChips.value = 0
+      } else if (data.game_over_reason === 'k_bankrupt') {
+        kChips.value = 0
+      }
+      // ===== 终局冻结：账户冻结（stage_verdict） =====
+      if (data.game_over_reason === 'account_frozen') {
+        setTimeout(() => {
+          showFrozenScreen.value = true
+        }, 1200)
       }
     }
   } catch (e) {
@@ -401,8 +621,32 @@ function restartGame() {
   router.push('/')
 }
 
+// ===== Glitch 故障转场 =====
+function triggerGlitchTransition() {
+  return new Promise((resolve) => {
+    showGlitch.value = true
+    setTimeout(() => {
+      showGlitch.value = false
+      resolve()
+    }, 1600)
+  })
+}
+
+// ===== 接受借款协议 =====
+function onAcceptLoan() {
+  loanAccepted.value = true
+  showLoanDialog.value = false
+  playerChips.value = 100000
+  debt.value = 100000
+  kTaunt.value = '（K露出诡异的笑容）好孩子。现在，我们继续玩。'
+  pokerRoundOver.value = false
+  pokerGameOver.value = false
+  actionLog.value.push({ role: 'system', text: '✓ 借款协议已签订 | 到账 ¥100,000 | 负债 ¥100,000' })
+}
+
 onMounted(() => {
   const name = sessionStorage.getItem('abyss_player_name') || '无名者'
+  initPoker()
 })
 </script>
 
@@ -551,4 +795,419 @@ onMounted(() => {
 /* ======== Footer ======== */
 .game-footer { text-align:center; padding:8px 0; background:rgba(5,5,8,0.95); border-top:1px solid rgba(40,40,60,0.2); flex-shrink:0; }
 .game-footer p { font-size:0.65rem; color:#ff4c4c; opacity:0.5; margin:0; }
+
+/* ========================================================
+   ★★★ 状态机主题切换 ★★★
+   ======================================================== */
+
+/* 阶段短名称徽章 */
+.header-right-poker { display:flex; align-items:center; gap:10px; }
+.stage-badge {
+  font-size:0.7rem;
+  padding:3px 10px;
+  letter-spacing:0.2rem;
+  border:1px solid;
+  font-family:'Courier New', monospace;
+}
+.badge-stage_bait { color:#ffd700; border-color:#8b6914; background:rgba(139,105,20,0.15); }
+.badge-stage_hook { color:#ff4c4c; border-color:#8b0000; background:rgba(139,0,0,0.15); }
+.badge-stage_trap { color:#ff3333; border-color:#ff3333; background:rgba(139,0,0,0.3); animation:badgeWarn 1.2s ease-in-out infinite; }
+.badge-stage_contract { color:#ffd700; border-color:#ffd700; background:rgba(139,0,0,0.3); }
+.badge-stage_verdict { color:#888; border-color:#333; background:#000; }
+
+@keyframes badgeWarn {
+  0%,100% { box-shadow:0 0 5px rgba(255,51,51,0.3); }
+  50% { box-shadow:0 0 15px rgba(255,51,51,0.8); }
+}
+
+/* 阶段提示条 */
+.stage-hint-bar {
+  padding:8px 20px;
+  font-size:0.8rem;
+  letter-spacing:0.15rem;
+  text-align:center;
+  border-bottom:1px solid;
+  flex-shrink:0;
+}
+.hint-stage_bait { background:linear-gradient(90deg, rgba(50,40,0,0.3), rgba(80,60,0,0.5), rgba(50,40,0,0.3)); color:#ffd700; border-bottom-color:rgba(212,175,55,0.3); }
+.hint-stage_hook { background:linear-gradient(90deg, rgba(30,0,0,0.6), rgba(60,0,0,0.8), rgba(30,0,0,0.6)); color:#ff9999; border-bottom-color:rgba(139,0,0,0.4); }
+.hint-stage_trap { background:linear-gradient(90deg, rgba(60,0,0,0.6), rgba(100,0,0,0.9), rgba(60,0,0,0.6)); color:#ff3333; border-bottom-color:#ff3333; font-weight:700; animation:trapHintPulse 1.5s ease-in-out infinite; }
+.hint-stage_contract { background:linear-gradient(90deg, rgba(60,40,0,0.5), rgba(100,70,0,0.7), rgba(60,40,0,0.5)); color:#ffd700; border-bottom-color:#d4af37; }
+.hint-stage_verdict { background:#000; color:#666; border-bottom-color:#333; }
+
+@keyframes trapHintPulse {
+  0%,100% { opacity:1; }
+  50% { opacity:0.7; }
+}
+
+/* ======== 负债显示 ======== */
+.debt-display {
+  display:block;
+  font-size:0.8rem;
+  color:#ff3333;
+  font-family:'Courier New',monospace;
+  margin-top:4px;
+  animation:debtBlink 1.4s ease-in-out infinite;
+  text-shadow:0 0 10px rgba(255,51,51,0.6);
+  letter-spacing:0.1rem;
+}
+@keyframes debtBlink {
+  0%,100% { opacity:1; text-shadow:0 0 10px rgba(255,51,51,0.6); }
+  50% { opacity:0.5; text-shadow:0 0 20px rgba(255,51,51,1); }
+}
+
+/* ========================================================
+   ★★★ 阶段主题色 ★★★
+   ======================================================== */
+
+/* stage_bait: 金碧辉煌 */
+.game-page.theme-stage_bait {
+  background:linear-gradient(180deg, #0a0805 0%, #1a1405 50%, #0a0805 100%);
+}
+.game-page.theme-stage_bait::before {
+  content:'';
+  position:absolute;
+  inset:0;
+  background:radial-gradient(ellipse at top, rgba(212,175,55,0.08), transparent 60%);
+  pointer-events:none;
+  z-index:0;
+}
+.theme-stage_bait .game-logo { color:#ffd700 !important; text-shadow:0 0 15px rgba(255,215,0,0.5) !important; }
+
+/* stage_hook: 暗黑猩红 */
+.game-page.theme-stage_hook {
+  background:linear-gradient(180deg, #050000 0%, #150000 50%, #050000 100%);
+}
+.theme-stage_hook .game-logo { color:#ff3333 !important; text-shadow:0 0 20px rgba(255,51,51,0.6) !important; }
+
+/* stage_trap: 警告红 + 呼吸灯（见下方） */
+.game-page.theme-stage_trap {
+  background:linear-gradient(180deg, #080000 0%, #200000 50%, #080000 100%);
+}
+.theme-stage_trap .game-logo { color:#ff0000 !important; text-shadow:0 0 25px rgba(255,0,0,0.8) !important; animation:logoShake 0.3s ease-in-out infinite; }
+
+@keyframes logoShake {
+  0%,100% { transform:translateX(0); }
+  25% { transform:translateX(-1px); }
+  75% { transform:translateX(1px); }
+}
+
+/* stage_contract: 金色诱惑 */
+.game-page.theme-stage_contract {
+  background:linear-gradient(180deg, #0a0805 0%, #1a0f00 50%, #0a0805 100%);
+}
+
+/* stage_verdict: 冷色冻结 */
+.game-page.theme-stage_verdict {
+  background:#000 !important;
+  filter:grayscale(100%);
+  pointer-events:none;
+}
+
+/* ========================================================
+   ★★★ 呼吸灯边框（stage_trap）★★★
+   ======================================================== */
+.pressure-border {
+  position:fixed;
+  inset:0;
+  pointer-events:none;
+  z-index:200;
+  box-shadow:
+    inset 0 0 60px rgba(139,0,0,0.6),
+    inset 0 0 120px rgba(255,0,0,0.3);
+  animation:pressurePulse 2s ease-in-out infinite;
+}
+@keyframes pressurePulse {
+  0%,100% {
+    box-shadow:
+      inset 0 0 40px rgba(139,0,0,0.4),
+      inset 0 0 100px rgba(255,0,0,0.2);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 100px rgba(255,0,0,0.9),
+      inset 0 0 200px rgba(255,0,0,0.5);
+  }
+}
+
+.pressure-border::before,
+.pressure-border::after {
+  content:'';
+  position:absolute;
+  left:0;
+  right:0;
+  height:4px;
+  background:linear-gradient(90deg, transparent, #ff0000, transparent);
+  animation:scanBar 3s linear infinite;
+}
+.pressure-border::before { top:0; }
+.pressure-border::after { bottom:0; animation-delay:1.5s; }
+
+@keyframes scanBar {
+  0% { opacity:0; transform:scaleX(0.3); }
+  50% { opacity:1; transform:scaleX(1); }
+  100% { opacity:0; transform:scaleX(0.3); }
+}
+
+/* ========================================================
+   ★★★ Glitch 故障特效（stage_hook 切入时）★★★
+   ======================================================== */
+.glitch-overlay {
+  position:fixed;
+  inset:0;
+  z-index:9000;
+  background:rgba(0,0,0,0.6);
+  pointer-events:none;
+  overflow:hidden;
+  animation:glitchBg 1.6s ease;
+}
+
+@keyframes glitchBg {
+  0% { background:rgba(0,0,0,0); }
+  10% { background:rgba(255,0,0,0.3); }
+  15% { background:rgba(0,255,255,0.2); }
+  20% { background:rgba(0,0,0,0.9); }
+  30% { background:rgba(139,0,0,0.6); }
+  50% { background:rgba(0,0,0,0.7); }
+  100% { background:rgba(0,0,0,0); }
+}
+
+.glitch-bar {
+  position:absolute;
+  left:0;
+  right:0;
+  height:40px;
+  background:linear-gradient(90deg, transparent, #ff0000, transparent);
+  opacity:0.8;
+  mix-blend-mode:screen;
+}
+
+.glitch-bar-1 {
+  top:20%;
+  animation:glitchBarMove 0.15s steps(2) infinite;
+  background:linear-gradient(90deg, transparent, rgba(255,0,0,0.6), transparent);
+}
+.glitch-bar-2 {
+  top:50%;
+  height:6px;
+  animation:glitchBarMove 0.1s steps(3) infinite reverse;
+  background:linear-gradient(90deg, transparent, rgba(0,255,255,0.5), transparent);
+}
+.glitch-bar-3 {
+  top:75%;
+  height:20px;
+  animation:glitchBarMove 0.2s steps(2) infinite;
+  background:linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+}
+
+@keyframes glitchBarMove {
+  0% { transform:translateX(-30px) skewX(0deg); }
+  50% { transform:translateX(30px) skewX(-20deg); }
+  100% { transform:translateX(-30px) skewX(0deg); }
+}
+
+.glitch-text {
+  position:absolute;
+  top:50%;
+  left:50%;
+  transform:translate(-50%, -50%);
+  font-size:3rem;
+  font-weight:700;
+  color:#ff3333;
+  font-family:'Courier New',monospace;
+  letter-spacing:0.8rem;
+  text-shadow:
+    2px 0 #00ffff,
+    -2px 0 #ff00ff;
+  animation:glitchText 0.15s steps(2) infinite;
+}
+
+.glitch-text::before,
+.glitch-text::after {
+  content:attr(data-text);
+  position:absolute;
+  top:0;
+  left:0;
+  width:100%;
+  height:100%;
+}
+
+.glitch-text::before {
+  color:#00ffff;
+  z-index:-1;
+  animation:glitchOffset1 0.3s steps(3) infinite alternate;
+}
+
+.glitch-text::after {
+  color:#ff00ff;
+  z-index:-1;
+  animation:glitchOffset2 0.3s steps(3) infinite alternate;
+}
+
+@keyframes glitchText {
+  0%,100% { opacity:1; transform:translate(-50%, -50%); }
+  50% { opacity:0.8; transform:translate(-50%, -50%) skewX(-3deg); }
+}
+
+@keyframes glitchOffset1 {
+  0% { transform:translate(-2px, 0); }
+  100% { transform:translate(3px, -2px); }
+}
+@keyframes glitchOffset2 {
+  0% { transform:translate(3px, 0); }
+  100% { transform:translate(-2px, 2px); }
+}
+
+/* ========================================================
+   ★★★ 规则说明弹窗 ★★★
+   ======================================================== */
+.rules-overlay {
+  position:fixed;
+  inset:0;
+  z-index:400;
+  background:rgba(0,0,0,0.92);
+  backdrop-filter:blur(8px);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-family:'Noto Serif SC','SimSun',serif;
+}
+
+.rules-box {
+  width:92%;
+  max-width:540px;
+  padding:35px 40px;
+  background:linear-gradient(135deg, #0a0a15 0%, #15151f 50%, #0a0a15 100%);
+  border:2px solid #d4af37;
+  box-shadow:0 0 60px rgba(212,175,55,0.4), inset 0 0 30px rgba(212,175,55,0.1);
+  animation:rulesIn 0.6s cubic-bezier(0.19, 1, 0.22, 1);
+  position:relative;
+}
+
+@keyframes rulesIn {
+  0% { opacity:0; transform:scale(0.9) translateY(20px); }
+  100% { opacity:1; transform:scale(1) translateY(0); }
+}
+
+.rules-header {
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:15px;
+  margin-bottom:25px;
+  padding-bottom:15px;
+  border-bottom:1px solid rgba(212,175,55,0.3);
+}
+
+.rules-icon {
+  color:#d4af37;
+  font-size:1.4rem;
+}
+
+.rules-title {
+  font-size:1.3rem;
+  color:#ffd700;
+  letter-spacing:0.3rem;
+  margin:0;
+  text-shadow:0 0 15px rgba(255,215,0,0.4);
+}
+
+.rules-body {
+  color:#ccc;
+}
+
+.rule-item {
+  display:flex;
+  gap:16px;
+  margin-bottom:18px;
+  align-items:flex-start;
+}
+
+.rule-num {
+  flex-shrink:0;
+  width:36px;
+  height:36px;
+  line-height:34px;
+  text-align:center;
+  background:linear-gradient(135deg, #8b6914, #4a3a0a);
+  border:1px solid #d4af37;
+  color:#ffd700;
+  font-family:'Courier New',monospace;
+  font-size:0.85rem;
+  font-weight:700;
+  letter-spacing:0.05rem;
+}
+
+.rule-content { flex:1; }
+
+.rule-title {
+  color:#ffd700;
+  font-size:0.95rem;
+  margin:0 0 4px 0;
+  letter-spacing:0.1rem;
+  font-weight:700;
+}
+
+.rule-desc {
+  color:#aaa;
+  font-size:0.85rem;
+  margin:0;
+  line-height:1.7;
+}
+
+.op-tag {
+  display:inline-block;
+  padding:1px 8px;
+  font-size:0.75rem;
+  border:1px solid;
+  margin:0 2px;
+  letter-spacing:0.1rem;
+}
+.op-tag.op-call { color:#4caf50; border-color:rgba(76,175,80,0.5); }
+.op-tag.op-raise { color:#ff6b6b; border-color:rgba(255,107,107,0.5); }
+.op-tag.op-fold { color:#888; border-color:#555; }
+
+.rule-tip {
+  margin-top:20px;
+  padding:12px 15px;
+  background:rgba(212,175,55,0.08);
+  border-left:3px solid #d4af37;
+  font-size:0.82rem;
+  color:#d4c4a0;
+  line-height:1.8;
+}
+
+.tip-highlight {
+  color:#ffd700;
+  font-weight:700;
+}
+
+.rules-btn {
+  width:100%;
+  padding:14px;
+  margin-top:25px;
+  background:linear-gradient(180deg, rgba(212,175,55,0.25), rgba(139,105,20,0.15));
+  border:1px solid #d4af37;
+  color:#ffd700;
+  font-size:1rem;
+  font-family:inherit;
+  letter-spacing:0.5rem;
+  cursor:pointer;
+  transition:all 0.3s;
+}
+
+.rules-btn:hover {
+  background:linear-gradient(180deg, rgba(212,175,55,0.4), rgba(139,105,20,0.25));
+  box-shadow:0 0 25px rgba(212,175,55,0.5);
+  color:#fff;
+}
+
+.rules-fade-enter-active,
+.rules-fade-leave-active {
+  transition:opacity 0.4s ease;
+}
+.rules-fade-enter-from,
+.rules-fade-leave-to {
+  opacity:0;
+}
 </style>

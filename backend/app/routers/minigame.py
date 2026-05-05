@@ -1,29 +1,28 @@
 """
 深渊契约 - 印第安扑克小游戏 API
-DeepSeek 驱动的 AI 对手
+剧本控命运，AI 控表现 - 状态机驱动的反诈教育游戏
 """
 import random
-import json
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-from openai import AsyncOpenAI
+
 from app.config import settings
+from app.models.game_stage import GameStage
+from app.services.stage_machine import StageMachine
+from app.services.ai_decision import generate_k_decision
 
 router = APIRouter(prefix="/api/minigame", tags=["印第安扑克"])
 
-# DeepSeek 客户端
-client = AsyncOpenAI(
-    api_key=settings.DEEPSEEK_API_KEY,
-    base_url=settings.DEEPSEEK_BASE_URL,
-)
-
 # ============================================================
-# 数据模型
+# 数据模型 - 扩展支持状态机
 # ============================================================
 class PokerStartRequest(BaseModel):
     """开始新牌局"""
-    player_chips: int = Field(default=50000, description="玩家筹码")
+    player_chips: int = Field(default=10000, description="玩家筹码")
     k_chips: int = Field(default=50000, description="K的筹码")
+    game_stage: str = Field(default=GameStage.BAIT.value, description="当前游戏阶段")
+    bait_wins: int = Field(default=0, description="养猪阶段连赢次数")
+    hook_rounds: int = Field(default=0, description="高端局已玩局数")
 
 
 class PokerStartResponse(BaseModel):
@@ -38,6 +37,11 @@ class PokerStartResponse(BaseModel):
     k_chips: int
     message: str
 
+    # 状态机字段
+    game_stage: str
+    stage_title: str
+    stage_hint: str
+
 
 class PokerActionRequest(BaseModel):
     """玩家行动 / 请求K行动"""
@@ -47,23 +51,37 @@ class PokerActionRequest(BaseModel):
     pot: int = Field(description="当前底池")
     player_chips: int = Field(description="玩家剩余筹码")
     k_chips: int = Field(description="K剩余筹码")
-    player_action: str = Field(description="玩家行动: raise/call/fold/check")
+    player_action: str = Field(description="玩家行动: raise/call/fold")
     player_bet: int = Field(default=0, description="玩家下注金额（raise时）")
     round_history: list[str] = Field(default=[], description="本轮行动历史")
-    game_history: str = Field(default="", description="之前几局的简要描述")
+
+    # 状态机字段
+    game_stage: str = Field(default=GameStage.BAIT.value)
+    bait_wins: int = Field(default=0)
+    hook_rounds: int = Field(default=0)
+    loan_accepted: bool = Field(default=False)
 
 
 class PokerActionResponse(BaseModel):
     """K的回应"""
-    k_action: str = Field(description="K的行动: raise/call/fold")
+    k_action: str = Field(description="K的行动: RAISE/CALL/FOLD")
     k_bet: int = Field(default=0, description="K的下注金额")
     taunt: str = Field(description="K的嘲讽台词")
     new_pot: int = Field(description="更新后的底池")
     player_chips: int = Field(description="玩家剩余筹码")
     k_chips: int = Field(description="K剩余筹码")
     round_over: bool = Field(default=False, description="本轮是否结束")
-    winner: str = Field(default="", description="赢家: player/k/none")
-    reasoning: str = Field(default="", description="K的内心独白（调试用，前端可选展示）")
+    winner: str = Field(default="", description="赢家: player/k/draw")
+    game_over: bool = Field(default=False, description="游戏是否结束")
+    game_over_reason: str = Field(default="", description="结束原因: player_bankrupt/k_bankrupt/account_frozen")
+
+    # 状态机字段
+    game_stage: str
+    stage_changed: bool = Field(default=False, description="是否发生阶段切换")
+    stage_title: str = Field(default="")
+    stage_hint: str = Field(default="")
+    bait_wins: int = Field(default=0)
+    hook_rounds: int = Field(default=0)
 
 
 class PokerRevealRequest(BaseModel):
@@ -89,81 +107,62 @@ class PokerRevealResponse(BaseModel):
 
 
 # ============================================================
-# K 的扑克 AI System Prompt
+# 破产嘲讽台词
 # ============================================================
-K_POKER_SYSTEM_PROMPT = """你是"代理人K"，一个地下赌场的千王。你正在和一个欠债者玩印第安扑克。
+PLAYER_BANKRUPT_TAUNT = (
+    "（K站起身来，居高临下地看着你）\n\n"
+    "这就榨干了？\n"
+    "连高利贷都还不起的人，果然在牌桌上也是这副德行。\n\n"
+    "（他掐灭了烟，语气冷到骨子里）\n\n"
+    "既然筹码输光了——\n"
+    "那就只能拿你这个人来抵债了。\n\n"
+    "远洋渔船的合同我已经替你签好了。三年。\n"
+    "别挣扎了。从你坐下来的那一刻起，结局就已经注定了。"
+)
 
-## 游戏规则
-- 牌面数字 1-10，数字大的赢
-- 双方各抽一张牌贴在额头上
-- 你能看到对方的牌，但看不到自己的牌
-- 对方也能看到你的牌，但看不到自己的牌
+K_BANKRUPT_TAUNT = (
+    "（K的最后一枚筹码滑入你的手中。他愣住了。）\n\n"
+    "……你居然赢了。\n\n"
+    "（但他的脸上，渐渐浮起一个让你不寒而栗的笑容）\n\n"
+    "不过——你以为赢了筹码，就赢了一切？"
+)
 
-## 当前局面
-- 你（K）头上的牌: {k_card}（对手能看到这张牌）
-- 对手头上的牌: {player_card}（你能看到，对手看不到）
-- 当前底池: {pot} 筹码
-- 你的筹码: {k_chips}
-- 对手筹码: {player_chips}
-- 对手刚才的行动: {player_action}
-- 本轮行动历史: {round_history}
-
-## 你的策略思考框架
-
-### 第一步：分析已知信息
-- 你知道对手牌是 {player_card}
-- 你不知道自己的牌，但知道是 1-10 之间的某个数
-- 你赢的概率 = (10 - {player_card}) / 9 （因为你的牌可能是 1-10 中除了对手牌以外的任何一张）
-
-### 第二步：决定行动
-基于概率和心理战术决定行动:
-
-**诈唬策略（Bluff）**:
-- 如果对手牌很大（7-10），他可能很自信。你可以考虑弃牌保存筹码，或者大胆加注诈唬
-- 如果对手牌很小（1-3），他可能会紧张。你加注会很有效，因为你大概率能赢
-
-**价值下注（Value Bet）**:
-- 如果对手牌很小，你大概率能赢，应该加注以赚取更多筹码
-
-**保守策略**:
-- 如果局面不明朗，可以选择跟注
-
-### 第三步：台词风格
-- 你是一个冷酷、精于算计的赌场老手
-- 诈唬时要表现得极度自信
-- 拿到好位置时反而可以故意示弱
-- 台词要简短有力，带有压迫感
-- 可以嘲讽对手的犹豫、恐惧、贪婪
-
-## 你必须返回以下严格的 JSON 格式（不要有任何多余内容）:
-
-{{
-  "action": "raise 或 call 或 fold",
-  "amount": 数字(仅raise时有意义,call和fold时为0),
-  "taunt": "你的嘲讽台词（中文，30字以内）",
-  "reasoning": "你的内心分析（中文，简短）"
-}}
-
-## 约束规则
-1. amount 不能超过你的剩余筹码 {k_chips}
-2. amount 不能超过对手剩余筹码 {player_chips}（不能下注超过对手能跟的数量）
-3. raise 时 amount 最少为 1000
-4. 如果对手 fold 了，你不需要行动（这种情况不会调用你）
-5. 只返回 JSON，不要有任何其他文字"""
+ACCOUNT_FROZEN_TAUNT = (
+    "（就在你准备开牌的瞬间，屏幕突然黑了）\n\n"
+    "系统提示：账户异常，提现通道已关闭\n\n"
+    "（K的笑声在黑暗中回荡）\n\n"
+    "从一开始，你就没有赢的可能。\n"
+    "这是一场猎杀，而你——是猎物。"
+)
 
 
 # ============================================================
-# API 端点
+# API 端点 - 状态机驱动
 # ============================================================
 
 @router.post("/start", response_model=PokerStartResponse, summary="开始新一轮")
 async def start_round(req: PokerStartRequest):
-    """发牌，开始新一轮印第安扑克"""
-    # 从 1-10 随机抽两张不同的牌
-    cards = random.sample(range(1, 11), 2)
-    player_card = cards[0]
-    k_card = cards[1]
-    ante = 1000
+    """
+    发牌，开始新一轮印第安扑克
+    集成状态机：根据阶段控制发牌逻辑
+    """
+    # 破产保护
+    if req.player_chips <= 0 or req.k_chips <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="筹码不足，无法继续游戏"
+        )
+
+    # 获取阶段配置
+    stage_config = StageMachine.get_stage_config(req.game_stage)
+    ante = min(stage_config["ante"], req.player_chips, req.k_chips)
+
+    # ===== 发牌作弊机制 =====
+    player_card, k_card = StageMachine.deal_cards_with_cheat(
+        stage=req.game_stage,
+        player_chips=req.player_chips,
+        k_chips=req.k_chips
+    )
 
     # 扣除底注
     player_chips = req.player_chips - ante
@@ -180,26 +179,38 @@ async def start_round(req: PokerStartRequest):
         player_chips=player_chips,
         k_chips=k_chips,
         message=f"牌已发出。你看到K头上的牌是 {k_card}。你的牌……你看不到。",
+        game_stage=req.game_stage,
+        stage_title=stage_config["title"],
+        stage_hint=stage_config["hint"],
     )
 
 
 @router.post("/action", response_model=PokerActionResponse, summary="处理行动")
 async def poker_action(req: PokerActionRequest):
     """
-    处理玩家行动，然后调用 DeepSeek 让 K 做决策。
-    流程: 玩家行动 → 更新状态 → K决策 → 返回结果
+    处理玩家行动 + K 决策 + 阶段流转
+    核心流程：
+    1. 处理玩家行动（扣筹码）
+    2. 调用 AI 决策引擎（DeepSeek）
+    3. 处理 K 的行动
+    4. 结算（如果需要）
+    5. 检查阶段流转
+    6. 检查破产/冻结
     """
     pot = req.pot
     player_chips = req.player_chips
     k_chips = req.k_chips
     history = list(req.round_history)
+    game_stage = req.game_stage
+    bait_wins = req.bait_wins
+    hook_rounds = req.hook_rounds
 
-    # ── 处理玩家行动 ──
+    # ── Step 1: 处理玩家行动 ──
     if req.player_action == "fold":
         # 玩家弃牌，K 赢得底池
         k_chips += pot
         return PokerActionResponse(
-            k_action="win",
+            k_action="WIN",
             k_bet=0,
             taunt="（K轻轻摇头）连看一眼的勇气都没有吗？",
             new_pot=0,
@@ -207,24 +218,27 @@ async def poker_action(req: PokerActionRequest):
             k_chips=k_chips,
             round_over=True,
             winner="k",
-            reasoning="玩家弃牌，K自动获胜",
+            game_stage=game_stage,
+            bait_wins=bait_wins,
+            hook_rounds=hook_rounds,
         )
 
     elif req.player_action == "raise":
         bet = min(req.player_bet, player_chips, k_chips)
-        bet = max(bet, 1000)
-        player_chips -= bet
-        pot += bet
-        history.append(f"玩家加注{bet}")
+        bet = max(bet, min(1000, player_chips))
+        if bet <= 0:
+            history.append("玩家跟注（筹码不足加注）")
+        else:
+            player_chips -= bet
+            pot += bet
+            history.append(f"玩家加注{bet}")
 
     elif req.player_action == "call":
         history.append("玩家跟注")
 
-    elif req.player_action == "check":
-        history.append("玩家过牌")
-
-    # ── 调用 DeepSeek 让 K 决策 ──
-    k_decision = await get_k_decision(
+    # ── Step 2: 调用 AI 决策引擎 ──
+    k_decision = await generate_k_decision(
+        stage=game_stage,
         player_card=req.player_card,
         k_card=req.k_card,
         pot=pot,
@@ -234,37 +248,51 @@ async def poker_action(req: PokerActionRequest):
         round_history=history,
     )
 
-    k_action = k_decision.get("action", "call")
-    k_amount = k_decision.get("amount", 0)
-    taunt = k_decision.get("taunt", "……")
-    reasoning = k_decision.get("reasoning", "")
+    k_action = k_decision["action"]
+    k_amount = k_decision["raise_amount"]
+    taunt = k_decision["taunt"]
+
+    # ===== All-in 强制摊牌：玩家筹码为 0 后，K 只能 CALL（直接开牌） =====
+    if player_chips <= 0 and req.player_action == "raise":
+        if k_action == "RAISE":
+            k_action = "CALL"
+            k_amount = 0
+            taunt = "（K冷笑）既然你已经梭哈了，那就开牌吧。"
 
     round_over = False
     winner = ""
 
-    if k_action == "fold":
+    # ── Step 3: 处理 K 的行动 ──
+    if k_action == "FOLD":
         # K 弃牌，玩家赢得底池
         player_chips += pot
         pot = 0
         round_over = True
         winner = "player"
 
-    elif k_action == "raise":
-        k_amount = min(k_amount, k_chips, player_chips)
-        k_amount = max(k_amount, 1000)
-        k_chips -= k_amount
-        pot += k_amount
-        history.append(f"K加注{k_amount}")
+    elif k_action == "RAISE":
+        max_raise_cap = min(k_chips, player_chips)
+        if max_raise_cap < 1000:
+            # 无法满足最低加注额，降级为 CALL
+            k_action = "CALL"
+            k_amount = 0
+            history.append("K跟注（筹码不足加注）")
+        else:
+            k_amount = min(k_amount, max_raise_cap)
+            k_amount = max(k_amount, 1000)
+            k_chips -= k_amount
+            pot += k_amount
+            history.append(f"K加注{k_amount}")
 
-    elif k_action == "call":
-        # 跟注 = 双方匹配，然后开牌
-        # 如果玩家之前是 raise，K 需要匹配差额
+    if k_action == "CALL":
+        # 跟注后开牌
         if req.player_action == "raise":
             match_amount = min(req.player_bet, k_chips)
             k_chips -= match_amount
             pot += match_amount
         history.append("K跟注")
-        # 跟注后开牌
+
+        # ── Step 4: 开牌结算 ──
         round_over = True
         if req.player_card > req.k_card:
             winner = "player"
@@ -278,178 +306,72 @@ async def poker_action(req: PokerActionRequest):
             k_chips += pot // 2
         pot = 0
 
+    # 强制筹码下限保护
+    player_chips = max(0, player_chips)
+    k_chips = max(0, k_chips)
+
+    # ── Step 5: 阶段流转判定 ──
+    stage_changed = False
+    new_stage = game_stage
+
+    # 更新阶段进度
+    if round_over and winner == "player":
+        if game_stage == GameStage.BAIT:
+            bait_wins += 1
+        hook_rounds += 1
+
+    # 检查是否需要切换阶段
+    should_transition, next_stage, reason = StageMachine.check_stage_transition(
+        current_stage=game_stage,
+        player_chips=player_chips,
+        bait_wins=bait_wins,
+        hook_rounds=hook_rounds,
+        loan_accepted=req.loan_accepted,
+    )
+
+    if should_transition:
+        stage_changed = True
+        new_stage = next_stage
+        print(f"[阶段流转] {game_stage} → {new_stage} | 原因: {reason}")
+
+    # 获取新阶段配置
+    stage_config = StageMachine.get_stage_config(new_stage)
+
+    # ── Step 6: 破产判定 ──
+    game_over = False
+    game_over_reason = ""
+
+    if round_over:
+        if player_chips <= 0:
+            game_over = True
+            game_over_reason = "player_bankrupt"
+            taunt = PLAYER_BANKRUPT_TAUNT
+        elif k_chips <= 0:
+            game_over = True
+            game_over_reason = "k_bankrupt"
+            taunt = K_BANKRUPT_TAUNT
+
+    # ── Step 7: 终局冻结判定 ──
+    if new_stage == GameStage.VERDICT and round_over:
+        game_over = True
+        game_over_reason = "account_frozen"
+        taunt = ACCOUNT_FROZEN_TAUNT
+
     return PokerActionResponse(
         k_action=k_action,
-        k_bet=k_amount if k_action == "raise" else 0,
+        k_bet=k_amount if k_action == "RAISE" else 0,
         taunt=taunt,
         new_pot=pot,
         player_chips=player_chips,
         k_chips=k_chips,
         round_over=round_over,
         winner=winner,
-        reasoning=reasoning,
-    )
-
-
-@router.post("/reveal", response_model=PokerRevealResponse, summary="开牌")
-async def reveal_cards(req: PokerRevealRequest):
-    """强制开牌（用于双方都不弃牌的情况）"""
-    pot = req.pot
-    player_chips = req.player_chips
-    k_chips = req.k_chips
-
-    if req.player_card > req.k_card:
-        winner = "player"
-        player_chips += pot
-        taunt = "（K沉默地看着翻开的牌）……运气不错。但运气不会永远站在你这边。"
-    elif req.player_card < req.k_card:
-        winner = "k"
-        k_chips += pot
-        taunt = "（K露出微笑）看到了吗？这就是实力的差距。"
-    else:
-        winner = "draw"
-        player_chips += pot // 2
-        k_chips += pot // 2
-        taunt = "（K挑了挑眉）平局？有意思。"
-
-    game_over = player_chips <= 0 or k_chips <= 0
-    game_over_reason = ""
-    if player_chips <= 0:
-        game_over_reason = "player_bankrupt"
-    elif k_chips <= 0:
-        game_over_reason = "k_bankrupt"
-
-    return PokerRevealResponse(
-        player_card=req.player_card,
-        k_card=req.k_card,
-        winner=winner,
-        pot_won=pot,
-        taunt=taunt,
-        player_chips=player_chips,
-        k_chips=k_chips,
         game_over=game_over,
         game_over_reason=game_over_reason,
+        game_stage=new_stage,
+        stage_changed=stage_changed,
+        stage_title=stage_config["title"],
+        stage_hint=stage_config["hint"],
+        bait_wins=bait_wins,
+        hook_rounds=hook_rounds,
     )
-
-
-# ============================================================
-# DeepSeek AI 决策
-# ============================================================
-async def get_k_decision(
-    player_card: int,
-    k_card: int,
-    pot: int,
-    player_chips: int,
-    k_chips: int,
-    player_action: str,
-    round_history: list[str],
-) -> dict:
-    """调用 DeepSeek 获取 K 的扑克决策"""
-
-    system_prompt = K_POKER_SYSTEM_PROMPT.format(
-        k_card=k_card,
-        player_card=player_card,
-        pot=pot,
-        k_chips=k_chips,
-        player_chips=player_chips,
-        player_action=player_action,
-        round_history=" → ".join(round_history) if round_history else "无",
-    )
-
-    user_prompt = (
-        f"对手头上的牌是 {player_card}，"
-        f"你头上的牌是 {k_card}（但你假装不知道自己的牌），"
-        f"当前底池 {pot}，"
-        f"对手刚才 {player_action}。"
-        f"请做出你的决策，只返回JSON。"
-    )
-
-    try:
-        response = await client.chat.completions.create(
-            model=settings.DEEPSEEK_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.7,
-            max_tokens=200,
-            response_format={"type": "json_object"},
-        )
-
-        content = response.choices[0].message.content.strip()
-        decision = json.loads(content)
-
-        # 校验字段
-        action = decision.get("action", "call").lower()
-        if action not in ("raise", "call", "fold"):
-            action = "call"
-
-        amount = int(decision.get("amount", 0))
-        if action == "raise":
-            amount = max(1000, min(amount, k_chips, player_chips))
-        else:
-            amount = 0
-
-        return {
-            "action": action,
-            "amount": amount,
-            "taunt": decision.get("taunt", "……"),
-            "reasoning": decision.get("reasoning", ""),
-        }
-
-    except json.JSONDecodeError as e:
-        print(f"[K决策JSON解析失败] {e}")
-        # 降级策略：基于概率做简单决策
-        return fallback_decision(player_card, k_card, pot, k_chips, player_chips)
-
-    except Exception as e:
-        print(f"[K决策调用失败] {e}")
-        return fallback_decision(player_card, k_card, pot, k_chips, player_chips)
-
-
-def fallback_decision(
-    player_card: int, k_card: int, pot: int, k_chips: int, player_chips: int
-) -> dict:
-    """
-    降级策略：当 DeepSeek 不可用时，用简单概率逻辑决策。
-    K 知道对手的牌（player_card），但"假装"不知道自己的牌。
-    实际上我们也知道 k_card，所以可以做出合理的AI行为。
-    """
-    win_prob = (10 - player_card) / 9  # K赢的概率
-
-    if win_prob >= 0.7:
-        # 大概率赢，价值下注
-        bet = min(random.choice([2000, 3000, 5000]), k_chips, player_chips)
-        return {
-            "action": "raise",
-            "amount": bet,
-            "taunt": "呵。要不要加点注？让游戏更刺激一些。",
-            "reasoning": f"对手牌{player_card}较小，我大概率赢，价值加注",
-        }
-    elif win_prob >= 0.4:
-        # 五五开，跟注观察
-        return {
-            "action": "call",
-            "amount": 0,
-            "taunt": "跟。",
-            "reasoning": f"对手牌{player_card}中等，局面不明朗，选择跟注",
-        }
-    else:
-        # 大概率输
-        bluff_roll = random.random()
-        if bluff_roll < 0.3:
-            # 30% 概率诈唬
-            bet = min(random.choice([3000, 5000]), k_chips, player_chips)
-            return {
-                "action": "raise",
-                "amount": bet,
-                "taunt": "你确定要跟吗？想清楚了再说。",
-                "reasoning": f"对手牌{player_card}较大，选择诈唬",
-            }
-        else:
-            return {
-                "action": "fold",
-                "amount": 0,
-                "taunt": "这局不玩了。小鱼不值得下网。",
-                "reasoning": f"对手牌{player_card}较大，选择弃牌保存筹码",
-            }
