@@ -15,15 +15,23 @@
     <LoanDialog :visible="showLoanDialog" @accept="onAcceptLoan" />
 
     <!-- 终局冻结 -->
-    <FrozenScreen :visible="showFrozenScreen" @restart="restartGame" />
+    <FrozenScreen :visible="showFrozenScreen" @restart="restartGame" @back="backToPlatform" />
 
     <!-- ========== 规则说明弹窗（首次进入扑克） ========== -->
     <transition name="rules-fade">
       <div v-if="showRules" class="rules-overlay" @click.self="closeRules">
         <div class="rules-box">
+          <!-- 合规声明 -->
+          <div class="compliance-notice">
+            <span class="compliance-icon">🛡️</span>
+            <p class="compliance-text">
+              <b>【系统郑重声明】</b>我们坚决抵制且不鼓励任何形式的赌博。为进行反诈心理推演，以下所有情景均使用日常休闲小游戏"额头上的小秘密"进行机制模拟。
+            </p>
+          </div>
+
           <div class="rules-header">
             <span class="rules-icon">♠</span>
-            <h2 class="rules-title">印第安扑克 · 规则速览</h2>
+            <h2 class="rules-title">额头上的小秘密 · 规则速览</h2>
             <span class="rules-icon">♦</span>
           </div>
 
@@ -32,7 +40,7 @@
               <span class="rule-num">01</span>
               <div class="rule-content">
                 <p class="rule-title">看得见对方，看不见自己</p>
-                <p class="rule-desc">你和 K 各抽一张牌贴在额头上。你能看到 K 的牌，但看不到自己的。</p>
+                <p class="rule-desc">你和 K 各抽一张数字牌贴在额头上。你能看到 K 的牌，但看不到自己的。</p>
               </div>
             </div>
 
@@ -129,10 +137,10 @@
       </div>
     </template>
 
-    <!-- ========== POKER MODE: 印第安扑克 ========== -->
+    <!-- ========== POKER MODE: 额头上的小秘密 ========== -->
     <template v-if="mode === 'poker'">
       <header class="game-header poker-header">
-        <h1 class="game-logo">{{ stageTitle || '印第安扑克' }}</h1>
+        <h1 class="game-logo">{{ stageTitle || '额头上的小秘密' }}</h1>
         <div class="header-right-poker">
           <span class="stage-badge" :class="'badge-' + gameStage">{{ stageShortName }}</span>
           <span class="round-badge">第 {{ pokerRound }} 局</span>
@@ -230,14 +238,14 @@
               <h3>{{ roundWinner === 'k' ? 'K 赢了' : '你弃牌了' }}</h3>
             </template>
             <button class="poker-btn next-round-btn" v-if="!pokerGameOver" @click="nextRound">下一局</button>
-            <button class="poker-btn next-round-btn" v-else @click="endPokerGame">结算</button>
+            <p class="game-over-hint" v-else>{{ kTaunt ? '' : '结算中...' }}</p>
           </div>
         </div>
       </div>
     </template>
 
     <footer class="game-footer">
-      <p>反赌博教育作品 | 报警 110 | 法律援助 12348 | 反诈热线 96110</p>
+      <p>反诈教育作品 | 报警 110 | 法律援助 12348 | 反诈热线 96110</p>
     </footer>
   </div>
 </template>
@@ -585,12 +593,11 @@ async function pokerAction(action) {
       } else if (data.game_over_reason === 'k_bankrupt') {
         kChips.value = 0
       }
-      // ===== 终局冻结：账户冻结（stage_verdict） =====
-      if (data.game_over_reason === 'account_frozen') {
-        setTimeout(() => {
-          showFrozenScreen.value = true
-        }, 1200)
-      }
+      // ===== 所有 game_over 都进入终局冻结画面 =====
+      // 无论玩家赢还是输，都触发终局剧情
+      setTimeout(() => {
+        showFrozenScreen.value = true
+      }, 2500)
     }
   } catch (e) {
     console.error(e)
@@ -619,6 +626,10 @@ function endPokerGame() {
 
 function restartGame() {
   router.push('/')
+}
+
+function backToPlatform() {
+  router.push('/chat')
 }
 
 // ===== Glitch 故障转场 =====
@@ -768,6 +779,13 @@ onMounted(() => {
 .deal-btn { background:linear-gradient(180deg,rgba(212,175,55,0.3),rgba(150,120,30,0.2)); border-color:rgba(212,175,55,0.4); color:#d4af37; padding:14px 40px; font-size:1rem; }
 .deal-btn:hover { box-shadow:0 0 15px rgba(212,175,55,0.2); }
 .next-round-btn { margin-top:12px; background:transparent; border-color:#555; color:#ccc; }
+
+/* 游戏结束双按钮 */
+.game-over-actions { display:flex; flex-direction:column; gap:10px; margin-top:14px; width:100%; }
+.restart-game-btn { background:transparent; border-color:#d4af37; color:#d4af37; }
+.restart-game-btn:hover { background:rgba(212,175,55,0.15); box-shadow:0 0 12px rgba(212,175,55,0.3); }
+.back-platform-btn { background:transparent; border-color:#6366f1; color:#a5b4fc; }
+.back-platform-btn:hover { background:rgba(99,102,241,0.15); box-shadow:0 0 12px rgba(99,102,241,0.3); }
 .raise-group { display:flex; gap:6px; align-items:center; }
 .raise-input { width:90px; padding:10px 8px; background:rgba(15,15,22,0.9); border:1px solid #333; border-radius:3px; color:#d4af37; font-family:'Courier New',monospace; font-size:0.9rem; text-align:center; }
 .raise-input:focus { border-color:rgba(139,0,0,0.5); outline:none; }
@@ -1209,5 +1227,35 @@ onMounted(() => {
 .rules-fade-enter-from,
 .rules-fade-leave-to {
   opacity:0;
+}
+
+/* ======== 合规声明 ======== */
+.compliance-notice {
+  display:flex;
+  align-items:flex-start;
+  gap:10px;
+  padding:12px 16px;
+  background:rgba(99,102,241,0.08);
+  border:1px solid rgba(99,102,241,0.25);
+  border-radius:8px;
+  margin-bottom:20px;
+}
+
+.compliance-icon {
+  font-size:1.2rem;
+  flex-shrink:0;
+  margin-top:2px;
+}
+
+.compliance-text {
+  font-size:0.72rem;
+  color:#9ca3af;
+  line-height:1.7;
+  margin:0;
+}
+
+.compliance-text b {
+  color:#a5b4fc;
+  font-size:0.74rem;
 }
 </style>

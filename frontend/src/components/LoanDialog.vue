@@ -27,7 +27,7 @@
           </p>
 
           <p class="contract-para">
-            看你骨骼惊奇，是块赌石的料。
+            看你骨骼惊奇，是块好料。
           </p>
 
           <p class="contract-para">

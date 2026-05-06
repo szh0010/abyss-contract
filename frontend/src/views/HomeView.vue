@@ -53,7 +53,7 @@
 
     <!-- 页脚 -->
     <footer class="home-footer">
-      <p>本游戏为反赌博 / 反诈骗教育作品 &nbsp;|&nbsp; 报警电话 110 &nbsp;|&nbsp; 法律援助 12348</p>
+      <p>本游戏为反诈骗教育作品 &nbsp;|&nbsp; 报警电话 110 &nbsp;|&nbsp; 法律援助 12348</p>
     </footer>
   </div>
 </template>

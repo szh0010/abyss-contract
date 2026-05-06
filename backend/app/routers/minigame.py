@@ -1,5 +1,5 @@
 """
-深渊契约 - 印第安扑克小游戏 API
+深渊契约 - 额头上的小秘密 小游戏 API
 剧本控命运，AI 控表现 - 状态机驱动的反诈教育游戏
 """
 import random
@@ -11,7 +11,7 @@ from app.models.game_stage import GameStage
 from app.services.stage_machine import StageMachine
 from app.services.ai_decision import generate_k_decision
 
-router = APIRouter(prefix="/api/minigame", tags=["印第安扑克"])
+router = APIRouter(prefix="/api/minigame", tags=["额头上的小秘密"])
 
 # ============================================================
 # 数据模型 - 扩展支持状态机
@@ -114,17 +114,22 @@ PLAYER_BANKRUPT_TAUNT = (
     "这就榨干了？\n"
     "连高利贷都还不起的人，果然在牌桌上也是这副德行。\n\n"
     "（他掐灭了烟，语气冷到骨子里）\n\n"
-    "既然筹码输光了——\n"
+    "既然积分输光了——\n"
     "那就只能拿你这个人来抵债了。\n\n"
     "远洋渔船的合同我已经替你签好了。三年。\n"
     "别挣扎了。从你坐下来的那一刻起，结局就已经注定了。"
 )
 
 K_BANKRUPT_TAUNT = (
-    "（K的最后一枚筹码滑入你的手中。他愣住了。）\n\n"
+    "（K的最后一枚积分滑入你的手中。他愣住了。）\n\n"
     "……你居然赢了。\n\n"
     "（但他的脸上，渐渐浮起一个让你不寒而栗的笑容）\n\n"
-    "不过——你以为赢了筹码，就赢了一切？"
+    "不过——你以为赢了积分，就赢了一切？\n\n"
+    "（K缓缓拿出手机，拨了一个号码）\n\n"
+    "喂？对，就是这个人。IP已经锁定了。\n"
+    "参与网络非法博弈的证据链……已经够了。\n\n"
+    "（他看向你，眼神冰冷）\n\n"
+    "你赢了游戏，但你输了自由。"
 )
 
 ACCOUNT_FROZEN_TAUNT = (
@@ -143,7 +148,7 @@ ACCOUNT_FROZEN_TAUNT = (
 @router.post("/start", response_model=PokerStartResponse, summary="开始新一轮")
 async def start_round(req: PokerStartRequest):
     """
-    发牌，开始新一轮印第安扑克
+    发牌，开始新一轮额头上的小秘密
     集成状态机：根据阶段控制发牌逻辑
     """
     # 破产保护
@@ -236,7 +241,89 @@ async def poker_action(req: PokerActionRequest):
     elif req.player_action == "call":
         history.append("玩家跟注")
 
-    # ── Step 2: 调用 AI 决策引擎 ──
+    # ── Step 2: 判断是否直接开牌 ──
+    # 规则：玩家跟注 = 直接摊牌比大小，不需要 K 再决策
+    if req.player_action == "call":
+        round_over = True
+        if req.player_card > req.k_card:
+            winner = "player"
+            player_chips += pot
+            taunt = "（K沉默地看着翻开的牌）……运气不错。"
+        elif req.player_card < req.k_card:
+            winner = "k"
+            k_chips += pot
+            taunt = "（K露出微笑）看到了吗？这就是差距。"
+        else:
+            winner = "draw"
+            player_chips += pot // 2
+            k_chips += pot // 2
+            taunt = "（K挑了挑眉）平局？有意思。"
+        pot = 0
+
+        # 强制筹码下限保护
+        player_chips = max(0, player_chips)
+        k_chips = max(0, k_chips)
+
+        # 阶段进度更新
+        if winner == "player":
+            if game_stage == GameStage.BAIT:
+                bait_wins += 1
+            hook_rounds += 1
+
+        # 阶段流转判定
+        should_transition, next_stage, reason = StageMachine.check_stage_transition(
+            current_stage=game_stage,
+            player_chips=player_chips,
+            bait_wins=bait_wins,
+            hook_rounds=hook_rounds,
+            loan_accepted=req.loan_accepted,
+        )
+
+        stage_changed = False
+        new_stage = game_stage
+        if should_transition:
+            stage_changed = True
+            new_stage = next_stage
+
+        stage_config = StageMachine.get_stage_config(new_stage)
+
+        # 破产判定
+        game_over = False
+        game_over_reason = ""
+        if player_chips <= 0:
+            game_over = True
+            game_over_reason = "player_bankrupt"
+            taunt = PLAYER_BANKRUPT_TAUNT
+        elif k_chips <= 0:
+            game_over = True
+            game_over_reason = "k_bankrupt"
+            taunt = K_BANKRUPT_TAUNT
+
+        if new_stage == GameStage.VERDICT:
+            game_over = True
+            game_over_reason = "account_frozen"
+            taunt = ACCOUNT_FROZEN_TAUNT
+
+        return PokerActionResponse(
+            k_action="CALL",
+            k_bet=0,
+            taunt=taunt,
+            new_pot=pot,
+            player_chips=player_chips,
+            k_chips=k_chips,
+            round_over=True,
+            winner=winner,
+            game_over=game_over,
+            game_over_reason=game_over_reason,
+            game_stage=new_stage,
+            stage_changed=stage_changed,
+            stage_title=stage_config["title"],
+            stage_hint=stage_config["hint"],
+            bait_wins=bait_wins,
+            hook_rounds=hook_rounds,
+        )
+
+    # ── Step 3: 玩家加注后，调用 AI 决策引擎让 K 回应 ──
     k_decision = await generate_k_decision(
         stage=game_stage,
         player_card=req.player_card,

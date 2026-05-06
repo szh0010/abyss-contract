@@ -41,7 +41,7 @@
             </div>
             <div class="info-row">
               <span class="info-label">原因:</span>
-              <span class="info-value">涉嫌参与网络赌博</span>
+              <span class="info-value">涉嫌参与网络诈骗</span>
             </div>
             <div class="info-row">
               <span class="info-label">代码:</span>
@@ -78,6 +78,9 @@
               <span class="btn-icon">⚐</span>
               【 一 键 举 报 并 重 新 开 始 】
             </button>
+            <button class="back-btn" @click="handleBack">
+              【 返 回 反 诈 先 锋 】
+            </button>
             <div class="hotline">
               报警: 110 &nbsp;|&nbsp; 反诈热线: 96110 &nbsp;|&nbsp; 法律援助: 12348
             </div>
@@ -95,7 +98,7 @@ const props = defineProps({
   visible: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['restart'])
+const emit = defineEmits(['restart', 'back'])
 
 const typedText1 = ref('')
 const typedText2 = ref('')
@@ -106,7 +109,7 @@ const showButton = ref(false)
 
 const line1 = '在这场名为贪婪的游戏里，底牌并不重要。'
 const line2 = '因为庄家，永远不会输。'
-const line3 = '请警惕网络涉诈赌博与套路贷陷阱！'
+const line3 = '请警惕网络涉诈博弈与套路贷陷阱！'
 
 function typeLine(text, targetRef, speed = 60) {
   return new Promise((resolve) => {
@@ -156,6 +159,10 @@ async function startTyping() {
 
 function handleRestart() {
   emit('restart')
+}
+
+function handleBack() {
+  emit('back')
 }
 
 watch(() => props.visible, (val) => {
@@ -458,6 +465,26 @@ onMounted(() => {
 .restart-btn:hover {
   background: linear-gradient(180deg, #2a2a3e, #1a1a25);
   box-shadow: 0 0 25px rgba(255, 235, 59, 0.5);
+  color: #fff;
+}
+
+.back-btn {
+  width: 100%;
+  padding: 14px;
+  background: linear-gradient(180deg, #1a1a2e, #0a0a15);
+  border: 2px solid #6366f1;
+  color: #a5b4fc;
+  font-size: 0.95rem;
+  font-family: inherit;
+  letter-spacing: 0.3rem;
+  cursor: pointer;
+  transition: all 0.3s;
+  margin-bottom: 15px;
+}
+
+.back-btn:hover {
+  background: linear-gradient(180deg, #2a2a3e, #1a1a25);
+  box-shadow: 0 0 25px rgba(99, 102, 241, 0.5);
   color: #fff;
 }
 

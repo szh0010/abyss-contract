@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.database import init_db
 from app.routers.game import router as game_router
 from app.routers.minigame import router as minigame_router
+from app.routers.chat import router as chat_router
 
 
 @asynccontextmanager
@@ -33,6 +34,7 @@ app.add_middleware(
 
 app.include_router(game_router)
 app.include_router(minigame_router)
+app.include_router(chat_router)
 
 
 @app.get("/", tags=["健康检查"])
