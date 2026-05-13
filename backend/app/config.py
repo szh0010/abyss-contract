@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
     DEEPSEEK_MODEL: str = "deepseek-chat"
 
+    # ===== JWT =====
+    JWT_SECRET_KEY: str = "abyss-jwt-change-me-in-production"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 天
+
     # 数值引擎
     DEBT_DECREASE_ON_REJECT: int = 5000
     GREED_INCREASE_ON_BARGAIN: int = 5

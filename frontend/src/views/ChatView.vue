@@ -91,6 +91,7 @@
 <script setup>
 import { ref, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
+import http from '../services/http'
 
 const router = useRouter()
 const messages = ref([])
@@ -153,32 +154,23 @@ async function sendMessage() {
     isLoading.value = false
     await scrollToBottom()
     await delay(3000)
-    router.push('/')
+    router.push('/game')
     return
   }
 
-  // 正常对话 → 调用后端 AI
+  // 正常对话 → 调用后端 AI（携带 JWT）
   isLoading.value = true
   try {
-    const res = await fetch('/api/chat/ask', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question: text })
-    })
-
-    if (res.ok) {
-      const data = await res.json()
-      messages.value.push({ role: 'assistant', text: data.answer })
-    } else {
-      messages.value.push({
-        role: 'assistant',
-        text: '抱歉，我暂时无法回答这个问题。请稍后再试，或拨打反诈热线 96110 获取帮助。'
-      })
-    }
+    const { data } = await http.post('/chat/ask', { question: text })
+    messages.value.push({ role: 'assistant', text: data.answer })
   } catch (e) {
+    // 401 已由拦截器统一处理（清 token + 跳登录），这里只提示其他错误
+    if (e?.response?.status === 401) return
     messages.value.push({
       role: 'assistant',
-      text: '网络连接异常，请检查网络后重试。如遇紧急情况请拨打 110。'
+      text: e?.response?.data?.detail
+        ? `抱歉：${e.response.data.detail}`
+        : '网络连接异常，请检查网络后重试。如遇紧急情况请拨打 110。',
     })
   } finally {
     isLoading.value = false
@@ -199,11 +191,15 @@ async function scrollToBottom() {
 </script>
 
 <style scoped>
+/* ============================================================
+   反诈客服聊天（暖色版）· 液态玻璃 + 弹簧交互
+============================================================ */
 .chat-page {
-  height: 100vh;
+  height: 100%;
   display: flex;
   flex-direction: column;
-  background: #f8f9fc;
+  background: transparent;
+  color: #2d2416;
 }
 
 /* ======== Header ======== */
@@ -211,17 +207,15 @@ async function scrollToBottom() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 28px;
-  background: #fff;
-  border-bottom: 1px solid #e5e7eb;
+  padding: 16px 26px;
+  background: rgba(255, 255, 255, 0.4);
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  border-bottom: 1px solid rgba(180, 130, 80, 0.12);
   flex-shrink: 0;
 }
 
-.header-left {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
+.header-left { display: flex; align-items: center; gap: 14px; }
 
 .assistant-avatar {
   width: 40px;
@@ -229,186 +223,202 @@ async function scrollToBottom() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #6366f1, #4f46e5);
-  border-radius: 10px;
+  border-radius: 12px;
   color: #fff;
+  background: linear-gradient(135deg, #ffb578, #ff7a50);
+  box-shadow:
+    0 10px 22px rgba(255, 122, 80, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
 }
 
-.header-info {
-  display: flex;
-  flex-direction: column;
-}
-
+.header-info { display: flex; flex-direction: column; }
 .header-title {
   font-size: 1rem;
-  font-weight: 700;
-  color: #1f2937;
+  font-weight: 600;
+  color: #2d2416;
+  letter-spacing: 0.04em;
   margin: 0;
 }
-
 .header-status {
-  font-size: 0.75rem;
-  color: #10b981;
+  font-size: 0.72rem;
+  color: #5fbf8a;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+}
+.header-status::before {
+  content: '●';
+  margin-right: 4px;
+  font-size: 0.6rem;
 }
 
 .model-tag {
   font-size: 0.7rem;
-  padding: 4px 10px;
-  background: #f3f4f6;
-  color: #6b7280;
-  border-radius: 12px;
-  border: 1px solid #e5e7eb;
+  padding: 5px 12px;
+  background: rgba(255, 255, 255, 0.55);
+  color: #ff7a50;
+  border-radius: 10px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    inset 0 0 0 0.5px rgba(255, 154, 86, 0.32);
 }
 
 /* ======== Messages ======== */
 .chat-messages {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: 24px 28px;
+  padding: 28px 32px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 22px;
+}
+.chat-messages::-webkit-scrollbar { width: 6px; }
+.chat-messages::-webkit-scrollbar-thumb {
+  background: rgba(180, 130, 80, 0.22);
+  border-radius: 3px;
 }
 
 .message {
   display: flex;
   gap: 12px;
-  max-width: 85%;
-  animation: msgIn 0.3s ease;
+  max-width: 82%;
+  animation: msgIn 0.35s cubic-bezier(0.22, 1, 0.36, 1);
 }
-
 @keyframes msgIn {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
-.user-msg {
-  align-self: flex-end;
-  flex-direction: row-reverse;
-}
-
-.assistant-msg {
-  align-self: flex-start;
-}
+.user-msg { align-self: flex-end; flex-direction: row-reverse; }
+.assistant-msg { align-self: flex-start; }
 
 .msg-avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.1rem;
+  font-size: 1.05rem;
   flex-shrink: 0;
 }
-
 .msg-avatar.user {
-  background: #e0e7ff;
+  background: rgba(255, 255, 255, 0.6);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    inset 0 0 0 0.5px rgba(180, 130, 80, 0.22);
 }
-
 .msg-avatar.assistant {
-  background: linear-gradient(135deg, #dbeafe, #ede9fe);
+  background: linear-gradient(135deg, rgba(255, 181, 120, 0.4), rgba(255, 122, 80, 0.4));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    inset 0 0 0 0.5px rgba(255, 154, 86, 0.4);
 }
 
 .msg-bubble {
   padding: 14px 18px;
-  border-radius: 16px;
-  line-height: 1.7;
-  font-size: 0.9rem;
+  border-radius: 18px;
+  line-height: 1.75;
+  font-size: 0.92rem;
+  font-weight: 400;
+  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
 }
 
 .user-bubble {
-  background: #6366f1;
+  background: linear-gradient(135deg, rgba(255, 181, 120, 0.92), rgba(255, 122, 80, 0.92));
   color: #fff;
-  border-bottom-right-radius: 4px;
+  border-bottom-right-radius: 6px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 10px 22px rgba(255, 122, 80, 0.25);
 }
 
 .assistant-bubble {
-  background: #fff;
-  color: #374151;
-  border: 1px solid #e5e7eb;
-  border-bottom-left-radius: 4px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  background: rgba(255, 255, 255, 0.62);
+  color: #463727;
+  border-bottom-left-radius: 6px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    inset 0 0 0 0.5px rgba(180, 130, 80, 0.15),
+    0 8px 20px rgba(200, 140, 80, 0.08);
 }
 
-.msg-text {
-  margin: 0 0 6px 0;
-}
-.msg-text:last-child {
-  margin-bottom: 0;
-}
+.msg-text { margin: 0 0 6px 0; }
+.msg-text:last-child { margin-bottom: 0; }
+.msg-text b { color: #ff7a50; font-weight: 600; }
+.user-bubble .msg-text b { color: #fff8ec; }
 
 .welcome-list {
-  margin: 8px 0;
+  margin: 8px 0 8px 2px;
   padding-left: 20px;
-  color: #6b7280;
-  font-size: 0.85rem;
+  color: #7e6a4f;
+  font-size: 0.86rem;
 }
+.welcome-list li { margin: 4px 0; }
 
-.welcome-list li {
-  margin: 4px 0;
-}
-
-/* 紧急阻断 */
+/* ======== 紧急阻断 ======== */
 .alert-block {
-  background: #fef2f2;
-  border: 2px solid #ef4444;
-  border-radius: 10px;
-  padding: 14px 16px;
+  background: linear-gradient(135deg, rgba(255, 225, 220, 0.7), rgba(255, 200, 195, 0.5));
+  border-radius: 14px;
+  padding: 16px 18px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.85),
+    inset 0 0 0 0.5px rgba(217, 74, 103, 0.32),
+    0 10px 26px rgba(217, 74, 103, 0.15);
 }
-
 .alert-icon-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   margin-bottom: 10px;
 }
-
-.alert-icon {
-  font-size: 1.2rem;
-}
-
+.alert-icon { font-size: 1.2rem; }
 .alert-title {
   font-size: 0.95rem;
-  font-weight: 700;
-  color: #dc2626;
+  font-weight: 600;
+  color: #a8334a;
+  letter-spacing: 0.08em;
 }
-
 .alert-text {
   margin: 0;
-  color: #7f1d1d;
-  font-size: 0.85rem;
-  line-height: 1.8;
+  color: #7a2a3a;
+  font-size: 0.86rem;
+  line-height: 1.85;
+  font-weight: 400;
 }
+.alert-text b { color: #a8334a; font-weight: 600; }
 
-/* 打字指示器 */
+/* ======== 打字指示器 ======== */
 .typing-indicator {
   display: flex;
   gap: 5px;
   padding: 4px 0;
 }
-
 .typing-indicator span {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  background: #6366f1;
+  background: #ff9a56;
+  box-shadow: 0 0 8px rgba(255, 154, 86, 0.55);
   animation: typingBounce 1.4s ease-in-out infinite;
 }
-
 .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
 .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
-
 @keyframes typingBounce {
   0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
-  40% { transform: translateY(-6px); opacity: 1; }
+  40%           { transform: translateY(-6px); opacity: 1; }
 }
 
 /* ======== Input Area ======== */
 .chat-input-area {
-  padding: 16px 28px 20px;
-  background: #fff;
-  border-top: 1px solid #e5e7eb;
+  padding: 16px 26px 20px;
+  background: rgba(255, 255, 255, 0.4);
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  border-top: 1px solid rgba(180, 130, 80, 0.12);
   flex-shrink: 0;
 }
 
@@ -416,62 +426,72 @@ async function scrollToBottom() {
   display: flex;
   gap: 10px;
   align-items: center;
-  background: #f9fafb;
-  border: 1px solid #e5e7eb;
-  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.7);
+  border-radius: 16px;
   padding: 6px 6px 6px 18px;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    inset 0 0 0 0.5px rgba(180, 130, 80, 0.18),
+    0 6px 18px rgba(200, 130, 70, 0.08);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
-
 .input-wrapper:focus-within {
-  border-color: #6366f1;
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 1),
+    inset 0 0 0 0.5px rgba(255, 154, 86, 0.55),
+    0 12px 30px rgba(255, 154, 86, 0.2);
 }
 
 .chat-input {
   flex: 1;
   border: none;
   background: transparent;
-  font-size: 0.9rem;
-  color: #1f2937;
+  font-size: 0.95rem;
+  color: #2d2416;
   outline: none;
-  padding: 10px 0;
+  padding: 12px 0;
   font-family: inherit;
+  font-weight: 400;
 }
+.chat-input::placeholder { color: #b8a583; font-weight: 300; }
 
-.chat-input::placeholder {
-  color: #9ca3af;
-}
-
+/* 发送按钮 · 液态玻璃 + 弹簧 */
 .send-btn {
   width: 40px;
   height: 40px;
-  border-radius: 10px;
+  border-radius: 12px;
   border: none;
-  background: linear-gradient(135deg, #6366f1, #4f46e5);
-  color: #fff;
   cursor: pointer;
+  color: #fff;
+  background: linear-gradient(135deg, #ffb578, #ff7a50);
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s;
   flex-shrink: 0;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.45),
+    0 10px 22px rgba(255, 122, 80, 0.4);
+  transition: transform 0.4s cubic-bezier(0.25, 1.5, 0.5, 1),
+              box-shadow 0.3s ease;
 }
-
 .send-btn:hover:not(:disabled) {
-  transform: scale(1.05);
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 14px 30px rgba(255, 122, 80, 0.55);
 }
-
-.send-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
+.send-btn:active:not(:disabled) {
+  transform: scale(0.92);
+  transition: all 0.4s cubic-bezier(0.25, 1.5, 0.5, 1);
 }
+.send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .input-hint {
-  margin: 8px 0 0;
+  margin: 10px 0 0;
   font-size: 0.7rem;
-  color: #9ca3af;
+  color: #b8a583;
   text-align: center;
+  font-weight: 400;
+  letter-spacing: 0.08em;
 }
 </style>

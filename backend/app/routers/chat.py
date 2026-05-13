@@ -1,12 +1,17 @@
-"""
-反诈智能客服 API 路由
-"""
-from fastapi import APIRouter
+"""反诈智能客服 API 路由"""
+from typing import Annotated
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
+from app.models.user import User
+from app.services.auth_service import get_current_user
 from app.services.chat_service import process_chat_message
 
-router = APIRouter(prefix="/api/chat", tags=["反诈客服"])
+router = APIRouter(
+    prefix="/api/chat",
+    tags=["反诈客服"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 class ChatRequest(BaseModel):
@@ -23,12 +28,15 @@ class ChatResponse(BaseModel):
 
 
 @router.post("/ask", response_model=ChatResponse, summary="智能客服对话")
-async def ask_question(req: ChatRequest):
+async def ask_question(
+    req: ChatRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+):
     """
-    反诈智能客服主接口
-    四层流水线处理：安全过滤 → 规则引擎 → 知识检索 → LLM 生成
+    反诈智能客服主接口（需登录）。
+    四层流水线：安全过滤 → 规则引擎 → 知识检索 → LLM 生成。
     """
-    result = await process_chat_message(req.question)
+    result = await process_chat_message(req.question, user=current_user)
 
     return ChatResponse(
         answer=result.get("answer", ""),

@@ -6,6 +6,8 @@ from app.database import init_db
 from app.routers.game import router as game_router
 from app.routers.minigame import router as minigame_router
 from app.routers.chat import router as chat_router
+from app.routers.assessment import router as assessment_router
+from app.routers.auth import router as auth_router
 
 
 @asynccontextmanager
@@ -32,9 +34,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router)
 app.include_router(game_router)
 app.include_router(minigame_router)
 app.include_router(chat_router)
+app.include_router(assessment_router)
 
 
 @app.get("/", tags=["健康检查"])

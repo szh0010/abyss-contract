@@ -16,6 +16,7 @@
 import re
 from openai import AsyncOpenAI
 from app.config import settings
+from app.models.user import User
 
 client = AsyncOpenAI(
     api_key=settings.DEEPSEEK_API_KEY,
@@ -366,29 +367,48 @@ async def generate_rag_response(user_message: str, rag_context: str) -> str:
 # ============================================================
 # 主入口：四层流水线处理
 # ============================================================
-async def process_chat_message(user_message: str) -> dict:
+async def process_chat_message(
+    user_message: str,
+    user: User | None = None,
+) -> dict:
     """
     反诈智能客服主处理函数
     四层流水线：安全过滤 → 规则引擎 → 知识检索 → LLM 生成
 
+    参数:
+        user_message: 用户原始提问
+        user: 已登录用户（由路由层通过 Depends(get_current_user) 注入）
+              聊天审计 / 后续接入历史记录表时按 user.username 绑定
+
     返回: {
-        "answer": str,       # 回复内容
-        "intent": str,       # 意图分类
-        "risk_level": str,   # 风险等级: blocked/critical/normal
-        "source": str,       # 响应来源: security_filter/rule_engine/rag_llm
-        "is_alert": bool,    # 是否为紧急警报
-        "knowledge_used": list  # 使用的知识库条目
+        "answer": str,          # 回复内容
+        "intent": str,          # 意图分类
+        "risk_level": str,      # 风险等级: blocked/critical/normal
+        "source": str,          # 响应来源: security_filter/rule_engine/rag_llm
+        "is_alert": bool,       # 是否为紧急警报
+        "knowledge_used": list, # 使用的知识库条目
+        "user": str | None,     # 归属用户名（调试/审计用）
     }
     """
+    username = user.username if user is not None else None
+
+    # 请求审计日志：谁问了什么（截断 60 字，避免噪音）
+    if username:
+        print(f"[chat] {username} > {user_message[:60]}")
+
+    def _with_owner(payload: dict) -> dict:
+        payload.setdefault("user", username)
+        return payload
+
     # ── Layer 1: 安全过滤 ──
     injection_result = security_filter(user_message)
     if injection_result:
-        return injection_result
+        return _with_owner(injection_result)
 
     # ── Layer 2: 规则引擎强拦截 ──
     rule_result = intent_recognition_and_rule_engine(user_message)
     if rule_result:
-        return rule_result
+        return _with_owner(rule_result)
 
     # ── Layer 3: 知识库检索 ──
     matched_knowledge = retrieve_knowledge(user_message)
@@ -397,11 +417,11 @@ async def process_chat_message(user_message: str) -> dict:
     # ── Layer 4: LLM 生成 ──
     answer = await generate_rag_response(user_message, rag_context)
 
-    return {
+    return _with_owner({
         "answer": answer,
         "intent": "NORMAL_CHAT",
         "risk_level": "normal",
         "source": "rag_llm",
         "is_alert": False,
         "knowledge_used": [item["category"] for item in matched_knowledge],
-    }
+    })
