@@ -1,5 +1,9 @@
 <template>
-  <div id="abyss-app" :class="{ 'game-mode': isGameMode, 'blank-mode': isBlankLayout }">
+  <div
+    id="abyss-app"
+    class="min-h-screen flex flex-col relative overflow-hidden bg-gradient-to-br from-[#FFFCF5] to-[#FDF5E6]"
+    :class="{ 'game-mode': isGameMode, 'blank-mode': isBlankLayout }"
+  >
     <!-- ============ 全站暖色流体光晕 ============ -->
     <div class="aurora" aria-hidden="true">
       <span class="blob blob-a"></span>
@@ -8,8 +12,10 @@
       <span class="grain"></span>
     </div>
 
-    <!-- 登录等无壳布局 -->
-    <template v-if="isBlankLayout">
+    <!-- ============ 主内容区：flex-grow 把 Footer 挤到底部 ============ -->
+    <main class="app-main flex-grow flex flex-col relative z-10">
+      <!-- 登录等无壳布局 -->
+      <template v-if="isBlankLayout">
       <router-view v-slot="{ Component }">
         <transition name="fade" mode="out-in">
           <component :is="Component" />
@@ -204,6 +210,36 @@
         @completed="onAssessCompleted"
       />
     </template>
+    </main>
+
+    <!-- ============ 合规 Footer · 液态玻璃备案信息 ============ -->
+    <footer class="site-footer w-full py-6 mt-auto text-center relative z-20">
+      <div class="footer-pill liquid-glass">
+        <div class="footer-row">
+          <span>版权所有 © 2026 反诈王牌</span>
+          <span class="footer-sep"></span>
+          <a
+            href="https://beian.miit.gov.cn/"
+            target="_blank"
+            rel="noreferrer"
+            class="footer-link"
+          >
+            闽ICP备2026016245号-1
+          </a>
+        </div>
+        <div class="footer-row">
+          <img src="/police-icon.png" alt="公安警徽" class="footer-police" />
+          <a
+            href="https://beian.mps.gov.cn/#/query/webSearch"
+            target="_blank"
+            rel="noreferrer"
+            class="footer-link"
+          >
+            闽公网安备35078402010138号
+          </a>
+        </div>
+      </div>
+    </footer>
 
     <!-- 全局 Toast（所有布局共用） -->
     <GlobalToast />
@@ -468,6 +504,8 @@ body {
   min-height: 100vh;
   width: 100%;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 /* 游戏模式：覆盖全站暖色，走深渊暗色基调 */
@@ -639,7 +677,8 @@ body {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
   gap: 18px;
-  height: 100vh;
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 18px 24px 18px 18px;
 }
 
@@ -1200,5 +1239,79 @@ body {
     grid-template-columns: repeat(4, minmax(0, 1fr));
     max-height: 240px;
   }
+}
+
+/* ============================================================
+   合规 Footer · 液态玻璃备案信息
+============================================================ */
+.site-footer {
+  width: 100%;
+  margin-top: auto;
+  padding: 16px 16px 24px;
+  text-align: center;
+  position: relative;
+  z-index: 20;
+}
+.footer-pill {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 22px;
+  border-radius: 18px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #6b7280;          /* tailwind text-gray-500 */
+  letter-spacing: 0.02em;
+}
+.footer-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: color 0.25s ease;
+}
+.footer-row:hover { color: #374151; }
+.footer-sep {
+  width: 1px;
+  height: 12px;
+  background: #d1d5db;     /* tailwind bg-gray-300 */
+}
+.footer-link {
+  color: inherit;
+  text-decoration: none;
+  transition: color 0.25s ease;
+}
+.footer-link:hover {
+  color: #3b82f6;          /* tailwind text-blue-500 */
+  text-decoration: underline;
+}
+.footer-police {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.18));
+}
+
+/* 主内容区：让 main 撑满剩余高度，把 footer 顶到底部 */
+.app-main {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  position: relative;
+  z-index: 10;
+}
+
+/* 液态玻璃通用类：与设计稿原参数一致；已存在则只是同义重声明，无副作用 */
+.liquid-glass {
+  background: rgba(255, 255, 255, 0.4);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  box-shadow:
+    inset 0 2px 4px rgba(255, 255, 255, 0.9),
+    inset 0 -2px 6px rgba(0, 0, 0, 0.05),
+    0 8px 32px rgba(0, 0, 0, 0.08);
 }
 </style>
