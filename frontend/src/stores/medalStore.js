@@ -12,7 +12,7 @@
  */
 import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
-import { getUsername } from '../services/http'
+import http, { getUsername } from '../services/http'
 
 const KEY_PREFIX = 'abyss_medals::'
 
@@ -89,6 +89,38 @@ export const useMedalStore = defineStore('medals', () => {
     medals.value = []
   }
 
+  /**
+   * 从后端 /api/user/profile 拉取真实勋章 → 合并到本地。
+   * - 服务端为权威源；本地未提交的勋章会保留并在下次提交时同步上去
+   * - 失败静默：未登录 / 离线 时退化为纯本地存储
+   */
+  async function hydrateFromServer() {
+    try {
+      const { data } = await http.get('/user/profile')
+      const remoteMedals = Array.isArray(data?.medals) ? data.medals : []
+
+      // 以 id 为键合并：远端覆盖本地条目；本地独有的保留
+      const byId = new Map(medals.value.map((m) => [m.id, m]))
+      for (const r of remoteMedals) {
+        const merged = {
+          id: r.id,
+          name: r.name,
+          icon: r.icon,
+          tier: r.tier,
+          unlocked: true,
+          acquired_at: r.unlocked_at,
+        }
+        byId.set(r.id, { ...(byId.get(r.id) || {}), ...merged })
+      }
+      medals.value = Array.from(byId.values())
+      return remoteMedals
+    } catch (e) {
+      if (e?.response?.status === 401) return []
+      console.warn('[medalStore] hydrate failed', e)
+      return []
+    }
+  }
+
   return {
     medals,
     unlockedMedals,
@@ -96,5 +128,6 @@ export const useMedalStore = defineStore('medals', () => {
     unlock,
     clearAll,
     syncWithCurrentUser,
+    hydrateFromServer,
   }
 })

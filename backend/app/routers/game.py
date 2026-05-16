@@ -1,3 +1,4 @@
+from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -5,8 +6,12 @@ from sqlalchemy import select
 
 from app.database import get_db
 from app.models.player import PlayerSession
+from app.models.user import User
+from app.models.game_state import GameState
+from app.models.user_medal import UserMedal
 from app.schemas.player import PlayerCreate, PlayerStatus
 from app.schemas.game import GameStageResponse, PlayerChoice, ChoiceResult
+from app.services.auth_service import get_current_user
 from app.services.game_engine import GameEngine
 from app.services.llm_service import classify_intent, generate_k_dialogue
 from app.config import settings
@@ -247,3 +252,85 @@ async def get_current_stage(
     """获取当前阶段的剧情数据"""
     engine = GameEngine(db)
     return await engine.get_current_stage(session_id)
+
+
+# ============================================================
+# 反诈作战大厅 · 游戏结算（持久化进度 + 满分勋章）
+# ============================================================
+class MedalPayload(BaseModel):
+    """前端通关时一并提交的勋章定义。id 不变，幂等解锁。"""
+    id: str = Field(..., min_length=1, max_length=60)
+    name: str = Field(..., min_length=1, max_length=60)
+    icon: str = Field(default="star", max_length=60)
+    tier: str = Field(default="gold", max_length=20)
+
+
+class GameSubmitRequest(BaseModel):
+    """关卡通关 / 进度推进 提交体。"""
+    current_stage: int = Field(..., ge=1, description="解锁到的关卡序号")
+    score: int = Field(..., ge=0, le=100, description="当前防骗得分")
+    unlocked_medals: list[MedalPayload] = Field(
+        default_factory=list,
+        description="本次解锁/累计已解锁的勋章；按 id 幂等",
+    )
+
+
+class GameSubmitResponse(BaseModel):
+    current_stage: int
+    score: int
+    unlocked_medal_ids: list[str]
+
+
+@router.post(
+    "/submit",
+    response_model=GameSubmitResponse,
+    summary="提交游戏成绩并持久化",
+)
+async def submit_game_progress(
+    body: GameSubmitRequest,
+    current: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    将关卡进度 + 防骗得分写入 GameState（一对一），
+    并把 unlocked_medals 幂等落库到 UserMedal（一对多）。
+    score 取较大值（避免重玩低分覆盖高分）；current_stage 同样向前推进。
+    """
+    # —— GameState：取或新建 —— #
+    gs = await db.get(GameState, current.id)
+    if gs is None:
+        gs = GameState(user_id=current.id, current_stage=1, score=0)
+        db.add(gs)
+
+    gs.current_stage = max(gs.current_stage, body.current_stage)
+    gs.score = max(gs.score, body.score)
+
+    # —— UserMedal：幂等解锁 —— #
+    if body.unlocked_medals:
+        existing = await db.execute(
+            select(UserMedal.medal_id).where(UserMedal.user_id == current.id)
+        )
+        owned = {row[0] for row in existing.all()}
+        for m in body.unlocked_medals:
+            if m.id in owned:
+                continue
+            db.add(UserMedal(
+                user_id=current.id,
+                medal_id=m.id,
+                name=m.name,
+                icon=m.icon,
+                tier=m.tier,
+            ))
+
+    await db.flush()
+
+    final = await db.execute(
+        select(UserMedal.medal_id).where(UserMedal.user_id == current.id)
+    )
+    medal_ids = [row[0] for row in final.all()]
+
+    return GameSubmitResponse(
+        current_stage=gs.current_stage,
+        score=gs.score,
+        unlocked_medal_ids=medal_ids,
+    )

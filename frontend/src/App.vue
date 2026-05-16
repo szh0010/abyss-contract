@@ -134,6 +134,13 @@
               </svg>
               <span>情景模拟</span>
             </router-link>
+            <router-link to="/forum" class="nav-row" active-class="active">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 3a9 9 0 0 1 9 9c0 5-4 8-9 8a9 9 0 0 1-3.6-.74L3 21l1.74-5.4A9 9 0 0 1 12 3z"/>
+                <path d="M8 11h8M8 14h6"/>
+              </svg>
+              <span>深渊树洞</span>
+            </router-link>
           </nav>
 
           <!-- 深渊入口：常态克制 / hover 暗红呼吸 -->
@@ -432,8 +439,22 @@ watch(
   }
 )
 
+// 已登录态变化时拉一次服务端勋章 + 进度（用于跨设备 / 跨登录持久化）
+watch(
+  storedUsername,
+  (name) => {
+    if (name) {
+      medalStore.hydrateFromServer()
+    }
+  },
+  { immediate: false }
+)
+
 onMounted(() => {
   medalStore.syncWithCurrentUser()
+  if (storedUsername.value) {
+    medalStore.hydrateFromServer()
+  }
   loadProfile()
 })
 </script>

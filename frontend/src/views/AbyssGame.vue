@@ -181,6 +181,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
+import http from '../services/http'
 import { useMedalStore } from '../stores/medalStore'
 import { toast } from '../services/toast'
 
@@ -314,6 +315,25 @@ function retryLevel() {
 /* ============================================================
    选项判定 · 通关结算 · 勋章解锁
 ============================================================ */
+async function persistProgress(extraMedals = []) {
+  try {
+    await http.post('/game/submit', {
+      current_stage: nextUnlockedStage(),
+      score: totalScore.value,
+      unlocked_medals: extraMedals,
+    })
+  } catch (e) {
+    if (e?.response?.status === 401) return
+    console.warn('[AbyssGame] persist failed', e)
+  }
+}
+
+function nextUnlockedStage() {
+  // 解锁到的最大关卡序号（默认 1）
+  const last = [...levels.value].reverse().find((l) => l.isUnlocked)
+  return last?.id ?? 1
+}
+
 function selectOption(opt) {
   if (isTyping.value || feedback.value) return
   feedback.value = { type: opt.type, desc: opt.desc }
@@ -330,6 +350,8 @@ function selectOption(opt) {
       levels.value[nextIdx].isUnlocked = true
     }
     toast.success(`+${lv.points} 作战积分`)
+    // 异步落库（非阻塞）
+    persistProgress()
   }
 }
 
@@ -347,17 +369,20 @@ function afterSuccess() {
   }
 }
 
-function triggerClear() {
+async function triggerClear() {
   // 解锁「首席反诈专家」勋章 → 主大厅勋章墙实时联动
-  const newlyAdded = medalStore.unlock({
+  const expert = {
     id: 'expert',
     icon: '🏆',
     name: '首席反诈专家',
     tier: 'gold',
-  })
+  }
+  const newlyAdded = medalStore.unlock(expert)
   if (newlyAdded) {
     toast.success('🏆 解锁勋章：首席反诈专家')
   }
+  // 持久化到后端：进度 + 勋章一起写
+  await persistProgress([expert])
   currentView.value = 'game-clear'
 }
 
@@ -371,8 +396,34 @@ function restartAll() {
   currentView.value = 'level-select'
 }
 
-// 进入页面时把当前用户的勋章拉一遍（防跨账号脏读）
-onMounted(() => medalStore.syncWithCurrentUser())
+/**
+ * 从后端 /user/profile 还原进度：
+ * - score 直接采用服务端值
+ * - 解锁到的关卡：把 1..current_stage 全部 isUnlocked=true
+ *   （我们不强制把它们标 completed，留给玩家自己决定是否复习）
+ */
+async function hydrateFromServer() {
+  try {
+    const { data } = await http.get('/user/profile')
+    const stage = Math.max(1, Math.min(levels.value.length, data?.current_stage ?? 1))
+    totalScore.value = Math.max(0, Math.min(100, data?.score ?? 0))
+    levels.value.forEach((lv, idx) => {
+      lv.isUnlocked = idx < stage
+    })
+  } catch (e) {
+    if (e?.response?.status === 401) return
+    console.warn('[AbyssGame] hydrate failed', e)
+  }
+}
+
+// 进入页面：先同步勋章墙的当前账号，再拉服务端进度 + 勋章
+onMounted(async () => {
+  medalStore.syncWithCurrentUser()
+  await Promise.all([
+    hydrateFromServer(),
+    medalStore.hydrateFromServer(),
+  ])
+})
 
 watch(activeLevelId, () => (feedback.value = null))
 </script>

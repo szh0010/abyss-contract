@@ -26,5 +26,7 @@ async def get_db():
 
 
 async def init_db():
+    # 提前 import 所有模型，确保 Base.metadata 拿到完整快照后再 create_all
+    from app import models  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

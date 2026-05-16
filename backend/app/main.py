@@ -1,6 +1,9 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.database import init_db
 from app.routers.game import router as game_router
@@ -8,6 +11,13 @@ from app.routers.minigame import router as minigame_router
 from app.routers.chat import router as chat_router
 from app.routers.assessment import router as assessment_router
 from app.routers.auth import router as auth_router
+from app.routers.user import router as user_router
+from app.routers.forum import router as forum_router
+
+
+# 上传目录：与 backend/ 同级
+UPLOAD_ROOT = Path(__file__).resolve().parent.parent / "uploads"
+(UPLOAD_ROOT / "forum").mkdir(parents=True, exist_ok=True)
 
 
 @asynccontextmanager
@@ -34,7 +44,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 静态资源：用户上传的图片直接对外暴露在 /uploads/...
+app.mount("/uploads", StaticFiles(directory=UPLOAD_ROOT), name="uploads")
+
 app.include_router(auth_router)
+app.include_router(user_router)
+app.include_router(forum_router)
 app.include_router(game_router)
 app.include_router(minigame_router)
 app.include_router(chat_router)

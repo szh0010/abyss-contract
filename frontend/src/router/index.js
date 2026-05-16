@@ -19,6 +19,7 @@ const routes = [
   // 平台（需要登录）
   { path: '/chat', name: 'Chat', component: () => import('../views/ChatView.vue') },
   { path: '/link-check', name: 'LinkCheck', component: () => import('../views/LinkCheckView.vue') },
+  { path: '/forum', name: 'Forum', component: () => import('../views/ForumView.vue') },
   // 旧「情景模拟」中间页已废弃，统一汇入新作战大厅
   { path: '/simulation', redirect: '/game' },
 
