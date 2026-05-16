@@ -391,3 +391,28 @@ async def create_comment(
         time=_format_time(comment.created_at),
         is_mine=True,
     )
+
+
+@router.delete(
+    "/comments/{comment_id}",
+    status_code=204,
+    summary="删除自己的评论",
+)
+async def delete_comment(
+    comment_id: str,
+    current: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    严格的所有权校验：只能删除自己发布的评论。
+    - 找不到 → 404
+    - 不是作者 → 403
+    """
+    comment = await db.get(PostComment, comment_id)
+    if comment is None:
+        raise HTTPException(status_code=404, detail="评论不存在")
+    if comment.user_id != current.id:
+        raise HTTPException(status_code=403, detail="只能删除自己发布的评论")
+
+    await db.delete(comment)
+    return None

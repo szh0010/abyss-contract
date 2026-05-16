@@ -131,6 +131,12 @@
                     <div class="comment-head">
                       <span class="comment-name">{{ c.author }}</span>
                       <span class="comment-time">{{ c.time }}</span>
+                      <button
+                        v-if="c.is_mine"
+                        class="comment-del"
+                        title="删除我的评论"
+                        @click="deleteComment(post, c.id)"
+                      >删除</button>
                     </div>
                     <p class="comment-text">{{ c.content }}</p>
                   </div>
@@ -335,6 +341,32 @@ async function submitComment(post) {
     toast.danger(e?.response?.data?.detail || '评论失败')
   } finally {
     post.posting_comment = false
+  }
+}
+
+async function deleteComment(post, commentId) {
+  if (!confirm('确定删除这条评论？删除后不可恢复。')) return
+  try {
+    await http.delete(`/forum/comments/${commentId}`)
+    if (Array.isArray(post.comments)) {
+      post.comments = post.comments.filter((c) => c.id !== commentId)
+    }
+    post.comment_count = Math.max(0, (post.comment_count || 1) - 1)
+    toast.success('评论已删除')
+  } catch (e) {
+    if (e?.response?.status === 401) return
+    if (e?.response?.status === 403) {
+      toast.warning('只能删除自己的评论')
+      return
+    }
+    if (e?.response?.status === 404) {
+      // 服务端已没有这条评论，前端跟着兜掉
+      if (Array.isArray(post.comments)) {
+        post.comments = post.comments.filter((c) => c.id !== commentId)
+      }
+      return
+    }
+    toast.danger(e?.response?.data?.detail || '删除失败')
   }
 }
 
@@ -706,6 +738,22 @@ onMounted(refresh)
 }
 .comment-name { font-size: 0.82rem; font-weight: 600; color: #1f2937; }
 .comment-time { font-size: 0.7rem; color: #9ca3af; }
+.comment-del {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 0.7rem;
+  color: #9ca3af;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+  transition: color 0.2s ease, background 0.2s ease;
+}
+.comment-del:hover {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.08);
+}
 .comment-text {
   margin-top: 2px;
   font-size: 0.84rem;
