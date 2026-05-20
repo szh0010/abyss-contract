@@ -121,18 +121,18 @@
 
           <!-- 导航 -->
           <nav class="rail-nav">
-            <router-link to="/chat" class="nav-row" active-class="active">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M4 6h16v10H8l-4 4V6z"/>
-              </svg>
-              <span>反诈客服</span>
-            </router-link>
             <router-link to="/game" class="nav-row" active-class="active">
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
                 <circle cx="12" cy="12" r="9"/>
                 <path d="M12 3v18M3 12h18"/>
               </svg>
               <span>情景模拟</span>
+            </router-link>
+            <router-link to="/chat" class="nav-row" active-class="active">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 6h16v10H8l-4 4V6z"/>
+              </svg>
+              <span>反诈客服</span>
             </router-link>
             <router-link to="/forum" class="nav-row" active-class="active">
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">

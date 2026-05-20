@@ -104,7 +104,7 @@ async function submit() {
     setUser(data.user)
     setUsername(data.user?.username || u)
     toast.success(mode.value === 'login' ? `欢迎回来，${data.user?.username || u}` : '账号创建成功')
-    const redirect = route.query.redirect || '/chat'
+    const redirect = route.query.redirect || '/game'
     router.replace(redirect)
   } catch (e) {
     const status = e?.response?.status

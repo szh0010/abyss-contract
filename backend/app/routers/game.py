@@ -1,4 +1,8 @@
-from typing import Annotated
+import json
+import re
+import traceback
+from typing import Annotated, Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +18,7 @@ from app.schemas.game import GameStageResponse, PlayerChoice, ChoiceResult
 from app.services.auth_service import get_current_user
 from app.services.game_engine import GameEngine
 from app.services.llm_service import classify_intent, generate_k_dialogue
+from app.services.coze_client import CozeClient, CozeError
 from app.config import settings
 
 router = APIRouter(prefix="/api/game", tags=["游戏核心"])
@@ -333,4 +338,193 @@ async def submit_game_progress(
         current_stage=gs.current_stage,
         score=gs.score,
         unlocked_medal_ids=medal_ids,
+    )
+
+
+# ============================================================
+# 反诈剧本杀 · 无限流 AI 模拟（Coze 专线）
+# ============================================================
+class GameSimulateRequest(BaseModel):
+    """剧本杀单回合请求体。
+
+    - user_message: 玩家输入；首回合用 "开始[剧本名]" 触发开局
+    - conversation_id: 用于多轮上下文延续；首回合留空
+    """
+    user_message: str = Field(..., min_length=1, max_length=600)
+    conversation_id: Optional[str] = Field(default=None, max_length=128)
+
+
+class GameOption(BaseModel):
+    """单个选项:text 给玩家看,risk 由前端隐形使用,玩家不可见。"""
+    text: str
+    risk: Optional[str] = None      # "high" | "low" | None
+
+
+class GameSimulateResponse(BaseModel):
+    scammer_message: str
+    options: list[GameOption]
+    warning_pop: Optional[str] = None
+    is_game_over: bool = False
+    game_result: str = "playing"   # "playing" | "win" | "lose"
+    report: Optional[str] = None
+    conversation_id: Optional[str] = None
+
+
+# ── 解析 Coze 返回的 JSON 文本（可能被 ```json ... ``` 包裹）
+_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.IGNORECASE | re.MULTILINE)
+
+
+def _strip_fences(text: str) -> str:
+    """剥掉 markdown 代码围栏，宽容处理 Coze 输出格式抖动。"""
+    if not text:
+        return ""
+    cleaned = _FENCE_RE.sub("", text.strip()).strip()
+    # 二次防御：找到第一个 { 和最后一个 } 之间的内容
+    first = cleaned.find("{")
+    last = cleaned.rfind("}")
+    if first != -1 and last != -1 and last > first:
+        cleaned = cleaned[first : last + 1]
+    return cleaned
+
+
+_FALLBACK_PAYLOAD = {
+    "scammer_message": "(剧本生成异常,AI 暂时离线)系统建议你直接挂断电话,并拨打 96110 反诈专线核实。",
+    "options": [
+        {"text": "立即挂断并拨打 96110", "risk": "low"},
+        {"text": "再观察一会儿", "risk": "high"},
+        {"text": "请求 AI 重新发牌", "risk": None},
+    ],
+    "warning_pop": "AI 链路异常,已切换到本地兜底剧本。",
+    "is_game_over": False,
+    "game_result": "playing",
+    "report": None,
+}
+
+
+_VALID_RESULTS = {"playing", "win", "lose"}
+
+
+def _normalize_options(raw_options) -> list[dict]:
+    """把 Coze 输出的 options 收敛成 [{text, risk}] 结构。
+
+    - 兼容旧字符串数组(['好的', '...']) → risk=None
+    - 兼容新对象数组([{text, risk}, ...])  → 透传
+    - 始终保证返回 3 项(不足补,多余截)
+    """
+    if not isinstance(raw_options, list):
+        raw_options = [raw_options]
+
+    cleaned: list[dict] = []
+    for item in raw_options:
+        if isinstance(item, dict):
+            text = str(item.get("text") or "").strip()
+            risk = str(item.get("risk") or "").strip().lower()
+            if risk not in ("high", "low"):
+                risk = None
+        else:
+            text = str(item or "").strip()
+            risk = None
+        if text:
+            cleaned.append({"text": text, "risk": risk})
+
+    cleaned = cleaned[:3]
+    while len(cleaned) < 3:
+        cleaned.append({"text": "(继续)", "risk": None})
+    return cleaned
+
+
+def _coerce_payload(raw: dict) -> dict:
+    """对 Coze 返回的字段做形态收敛,前端只面对干净结构。"""
+    options = _normalize_options(raw.get("options") or [])
+
+    # 兼容新旧两种字段:优先读 game_result,缺失则从 is_game_over 推断
+    raw_result = str(raw.get("game_result") or "").strip().lower()
+    if raw_result not in _VALID_RESULTS:
+        raw_result = "lose" if raw.get("is_game_over") else "playing"
+
+    is_over = raw_result in ("win", "lose")
+
+    return {
+        "scammer_message": str(raw.get("scammer_message") or "").strip()
+            or "(剧本人物沉默不语......)",
+        "options": options,
+        "warning_pop": (str(raw["warning_pop"]).strip()
+                       if raw.get("warning_pop") else None),
+        "is_game_over": is_over,
+        "game_result": raw_result,
+        "report": (str(raw["report"]).strip() if raw.get("report") else None),
+    }
+
+
+# 进程级单例：复用 httpx 连接，避免每回合都新建 client
+_game_coze: Optional[CozeClient] = None
+
+
+def _get_game_coze() -> CozeClient:
+    global _game_coze
+    if _game_coze is None:
+        _game_coze = CozeClient(bot_id=settings.COZE_GAME_BOT_ID)
+    return _game_coze
+
+
+@router.post(
+    "/simulate",
+    response_model=GameSimulateResponse,
+    summary="反诈剧本杀单回合（Coze 专线）",
+)
+async def simulate_turn(
+    body: GameSimulateRequest,
+    current: Annotated[User, Depends(get_current_user)],
+):
+    """
+    把玩家输入透传给反诈剧本杀智能体，把它返回的 JSON 字符串解析成结构化响应。
+
+    Coze 端约定输出形如：
+    {
+      "scammer_message": "...",
+      "options": ["...", "...", "..."],
+      "warning_pop": "..." | null,
+      "is_game_over": false,
+      "report": null
+    }
+
+    解析失败时返回兜底剧本，保证前端永远不会拿到 500。
+    """
+    coze = _get_game_coze()
+
+    try:
+        raw_text = await coze.chat(
+            user_message=body.user_message,
+            conversation_id=body.conversation_id,
+        )
+    except CozeError as e:
+        print(f"[剧本杀-Coze调用失败] {e}")
+        return GameSimulateResponse(
+            **_FALLBACK_PAYLOAD,
+            conversation_id=body.conversation_id,
+        )
+    except Exception as e:  # noqa: BLE001
+        print(f"[剧本杀-Coze未知异常] {type(e).__name__}: {e}")
+        traceback.print_exc()
+        return GameSimulateResponse(
+            **_FALLBACK_PAYLOAD,
+            conversation_id=body.conversation_id,
+        )
+
+    cleaned = _strip_fences(raw_text)
+    try:
+        parsed = json.loads(cleaned)
+        if not isinstance(parsed, dict):
+            raise ValueError("AI 返回的不是 JSON 对象")
+        payload = _coerce_payload(parsed)
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"[剧本杀-JSON解析失败] {e} | raw={raw_text[:200]!r}")
+        payload = dict(_FALLBACK_PAYLOAD)
+        payload["scammer_message"] = (
+            "(AI 输出格式出错,原文如下,请凭你的判断作答)\n\n" + raw_text.strip()[:300]
+        )
+
+    return GameSimulateResponse(
+        **payload,
+        conversation_id=body.conversation_id,
     )

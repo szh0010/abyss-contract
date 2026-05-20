@@ -10,10 +10,10 @@ const routes = [
     meta: { public: true, layout: 'blank' },
   },
 
-  // 根路径：登录则去 /chat，否则去 /login
+  // 根路径:登录则去 /game(默认首屏 = 情景模拟),否则去 /login
   {
     path: '/',
-    redirect: () => (getToken() && getUser() ? '/chat' : '/login'),
+    redirect: () => (getToken() && getUser() ? '/game' : '/login'),
   },
 
   // 平台（需要登录）
@@ -59,10 +59,10 @@ router.beforeEach((to) => {
   return true
 })
 
-// 已登录再访问 /login 时直接送回 /chat
+// 已登录再访问 /login 时直接送回 /game
 router.beforeEach((to) => {
   if (to.name === 'Login' && getToken() && getUser()) {
-    return { path: '/chat' }
+    return { path: '/game' }
   }
   return true
 })

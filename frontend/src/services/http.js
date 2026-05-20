@@ -83,7 +83,7 @@ export function clearAuth() {
 
 const http = axios.create({
   baseURL: '/api',
-  timeout: 20000,
+  timeout: 60000,
 })
 
 // 请求拦截：注入 Authorization

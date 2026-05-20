@@ -15,7 +15,7 @@
         </div>
       </div>
       <div class="header-right">
-        <span class="model-tag">DeepSeek 驱动</span>
+        <span class="model-tag">自研智能体驱动</span>
       </div>
     </header>
 
@@ -51,7 +51,13 @@
             </div>
             <p class="alert-text" v-html="msg.text"></p>
           </div>
-          <p v-else class="msg-text" v-html="msg.text"></p>
+          <!-- 普通消息:逐字打字机 + 闪烁光标 -->
+          <p
+            v-else
+            class="msg-text"
+            :class="{ cursor: msg.isTyping }"
+            v-html="msg.text"
+          ></p>
         </div>
       </div>
 
@@ -72,12 +78,12 @@
         <input
           v-model="inputText"
           type="text"
-          placeholder="输入你的问题，例如：什么是杀猪盘？"
+          :placeholder="inputLocked ? '反诈守护者正在打字…请稍候' : '输入你的问题,例如:什么是杀猪盘?'"
           @keyup.enter="sendMessage"
-          :disabled="isLoading"
+          :disabled="inputLocked"
           class="chat-input"
         />
-        <button class="send-btn" @click="sendMessage" :disabled="!inputText.trim() || isLoading">
+        <button class="send-btn" @click="sendMessage" :disabled="!inputText.trim() || inputLocked">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M22 2L11 13M22 2L15 22L11 13M22 2L2 9L11 13"/>
           </svg>
@@ -89,7 +95,7 @@
 </template>
 
 <script setup>
-import { ref, nextTick } from 'vue'
+import { ref, computed, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import http from '../services/http'
 
@@ -97,6 +103,7 @@ const router = useRouter()
 const messages = ref([])
 const inputText = ref('')
 const isLoading = ref(false)
+const inputLocked = ref(false)
 const messagesContainer = ref(null)
 
 const SENSITIVE_WORDS = ['转账', '安全账户', '验证码', '刷单', '中奖', '贷款', '裸聊']
@@ -113,7 +120,55 @@ function checkSimulationTrigger(text) {
   return triggers.some(t => text.includes(t))
 }
 
+const PUNCT_PAUSE = ['，', '。', '！', '？', '\n']
+
+/**
+ * 真·逐字打字机
+ * 关键点:必须通过 messages.value[idx] 访问 reactive proxy 再 += ,
+ *        否则 Vue 的依赖追踪不到 setter,会导致"光标先闪很久才一次性出现全文"。
+ */
+function typewriteAssistant(fullText) {
+  // 1. 推入空壳气泡,inputLocked 立刻置 true
+  inputLocked.value = true
+  messages.value.push({
+    role: 'assistant',
+    text: '',
+    isTyping: true,
+  })
+  const idx = messages.value.length - 1
+  const targetMessage = messages.value[idx]   // ← reactive proxy
+
+  // 2. HTML 段落直接整段呈现,避免标签被切坏
+  if (fullText.includes('<') && fullText.includes('>')) {
+    targetMessage.text = fullText
+    targetMessage.isTyping = false
+    inputLocked.value = false
+    scrollToBottom()
+    return
+  }
+
+  // 3. 逐字响应式追加
+  let i = 0
+  const type = () => {
+    if (i < fullText.length) {
+      const ch = fullText.charAt(i)
+      targetMessage.text += ch                // ← 触发响应式
+      i++
+      let d = 30 + Math.random() * 30
+      if (PUNCT_PAUSE.includes(ch)) d += 150
+      scrollToBottom()
+      setTimeout(type, d)
+    } else {
+      targetMessage.isTyping = false
+      inputLocked.value = false
+      scrollToBottom()
+    }
+  }
+  type()
+}
+
 async function sendMessage() {
+  if (inputLocked.value) return
   const text = inputText.value.trim()
   if (!text) return
 
@@ -121,32 +176,35 @@ async function sendMessage() {
   inputText.value = ''
   await scrollToBottom()
 
-  // 检查敏感词 → 紧急阻断
+  // 敏感词 → 紧急阻断(HTML,瞬时)
   const sensitiveWord = checkSensitiveWords(text)
   if (sensitiveWord) {
     isLoading.value = true
+    inputLocked.value = true
     await delay(500)
     messages.value.push({
       role: 'assistant',
       isAlert: true,
-      text: `检测到高风险关键词"<b>${sensitiveWord}</b>"！<br><br>`
-        + `<b>请立即停止任何转账操作！</b><br>`
+      text: `检测到高风险关键词"<b>${sensitiveWord}</b>"!<br><br>`
+        + `<b>请立即停止任何转账操作!</b><br>`
         + `正规机关不会通过电话/短信要求转账。<br><br>`
-        + `如已转账，请立即拨打 <b>110</b> 报警，并联系银行冻结账户。<br>`
-        + `反诈热线：<b>96110</b>`
+        + `如已转账,请立即拨打 <b>110</b> 报警,并联系银行冻结账户。<br>`
+        + `反诈热线:<b>96110</b>`
     })
     isLoading.value = false
+    inputLocked.value = false
     await scrollToBottom()
     return
   }
 
-  // 检查是否触发情景模拟
+  // 触发情景模拟(HTML,瞬时 + 跳转)
   if (checkSimulationTrigger(text)) {
     isLoading.value = true
+    inputLocked.value = true
     await delay(800)
     messages.value.push({
       role: 'assistant',
-      text: '哦？你觉得自己不会被骗？那我们来做一个<b>沉浸式情景模拟</b>吧。<br><br>'
+      text: '哦?你觉得自己不会被骗?那我们来做一个<b>沉浸式情景模拟</b>吧。<br><br>'
         + '接下来你将进入一个真实的诈骗场景还原——<b>《深渊契约》</b>。<br>'
         + '看看你能否识破所有陷阱……<br><br>'
         + '<i>3 秒后进入模拟……</i>'
@@ -154,26 +212,30 @@ async function sendMessage() {
     isLoading.value = false
     await scrollToBottom()
     await delay(3000)
+    inputLocked.value = false
     router.push('/game')
     return
   }
 
-  // 正常对话 → 调用后端 AI（携带 JWT）
+  // 正常对话 → AI 逐字打字
   isLoading.value = true
+  inputLocked.value = true
   try {
     const { data } = await http.post('/chat/ask', { question: text })
-    messages.value.push({ role: 'assistant', text: data.answer })
-  } catch (e) {
-    // 401 已由拦截器统一处理（清 token + 跳登录），这里只提示其他错误
-    if (e?.response?.status === 401) return
-    messages.value.push({
-      role: 'assistant',
-      text: e?.response?.data?.detail
-        ? `抱歉：${e.response.data.detail}`
-        : '网络连接异常，请检查网络后重试。如遇紧急情况请拨打 110。',
-    })
-  } finally {
     isLoading.value = false
+    typewriteAssistant(data.answer || '抱歉,出现异常。')
+  } catch (e) {
+    isLoading.value = false
+    if (e?.response?.status === 401) {
+      inputLocked.value = false
+      return
+    }
+    typewriteAssistant(
+      e?.response?.data?.detail
+        ? `抱歉:${e.response.data.detail}`
+        : '网络连接异常,请检查网络后重试。如遇紧急情况请拨打 110。'
+    )
+  } finally {
     await scrollToBottom()
   }
 }
@@ -350,6 +412,21 @@ async function scrollToBottom() {
 .msg-text:last-child { margin-bottom: 0; }
 .msg-text b { color: #ff7a50; font-weight: 600; }
 .user-bubble .msg-text b { color: #fff8ec; }
+
+/* 打字机光标 */
+.msg-text.cursor::after {
+  content: '▌';
+  display: inline-block;
+  color: #ff7a50;
+  animation: blink 1s step-end infinite;
+  margin-left: 4px;
+  vertical-align: baseline;
+  font-weight: 400;
+}
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0; }
+}
 
 .welcome-list {
   margin: 8px 0 8px 2px;
