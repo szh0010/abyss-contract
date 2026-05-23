@@ -58,6 +58,34 @@
             :class="{ cursor: msg.isTyping }"
             v-html="msg.text"
           ></p>
+
+          <!-- 朗读/暂停 · 仅在 AI 气泡 & 打字结束后展示 -->
+          <button
+            v-if="msg.role === 'assistant' && !msg.isAlert && !msg.isTyping && hasSpeech"
+            type="button"
+            class="speech-btn"
+            :class="{ 'speech-btn-active': activeSpeechIndex === i && !isSpeechPaused }"
+            :title="speechBtnTitle(i)"
+            :aria-label="speechBtnTitle(i)"
+            @click="toggleSpeech(stripHtml(msg.text), i)"
+          >
+            <!-- 播放(三角)/暂停(双竖线) 通过 SVG path 切换 -->
+            <svg
+              v-if="!(activeSpeechIndex === i && !isSpeechPaused)"
+              viewBox="0 0 24 24" width="14" height="14"
+              fill="currentColor" aria-hidden="true"
+            >
+              <path d="M7 5.5v13a1 1 0 0 0 1.5.87l11-6.5a1 1 0 0 0 0-1.74l-11-6.5A1 1 0 0 0 7 5.5z"/>
+            </svg>
+            <svg
+              v-else
+              viewBox="0 0 24 24" width="14" height="14"
+              fill="currentColor" aria-hidden="true"
+            >
+              <rect x="6.5" y="5" width="4" height="14" rx="1"/>
+              <rect x="13.5" y="5" width="4" height="14" rx="1"/>
+            </svg>
+          </button>
         </div>
       </div>
 
@@ -95,7 +123,7 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import http from '../services/http'
 
@@ -105,6 +133,87 @@ const inputText = ref('')
 const isLoading = ref(false)
 const inputLocked = ref(false)
 const messagesContainer = ref(null)
+
+/* ============================================================
+   语音朗读(Web Speech API · 纯前端)
+   - activeSpeechIndex: 当前正在朗读的消息下标(无则 -1)
+   - isSpeechPaused   : 是否暂停态
+   - toggleSpeech     : 同条 = 播放/暂停/恢复;切换则 cancel 旧的再开新的
+============================================================ */
+const hasSpeech = typeof window !== 'undefined'
+  && 'speechSynthesis' in window
+  && 'SpeechSynthesisUtterance' in window
+const activeSpeechIndex = ref(-1)
+const isSpeechPaused = ref(false)
+let currentUtter = null
+
+function stripHtml(html) {
+  if (!html) return ''
+  // <br> 当作换行;其余标签去掉,&nbsp; 之类用 DOM 反解
+  const div = document.createElement('div')
+  div.innerHTML = String(html).replace(/<br\s*\/?>/gi, '\n')
+  return (div.textContent || div.innerText || '').trim()
+}
+
+function resetSpeechState() {
+  activeSpeechIndex.value = -1
+  isSpeechPaused.value = false
+  currentUtter = null
+}
+
+function speechBtnTitle(i) {
+  if (activeSpeechIndex.value === i) {
+    return isSpeechPaused.value ? '继续朗读' : '暂停'
+  }
+  return '朗读'
+}
+
+function toggleSpeech(text, index) {
+  if (!hasSpeech) return
+  const synth = window.speechSynthesis
+  const cleanText = String(text || '').trim()
+  if (!cleanText) return
+
+  // 同一条气泡:暂停 ↔ 恢复
+  if (activeSpeechIndex.value === index && synth.speaking) {
+    if (isSpeechPaused.value) {
+      synth.resume()
+      isSpeechPaused.value = false
+    } else {
+      synth.pause()
+      isSpeechPaused.value = true
+    }
+    return
+  }
+
+  // 切换到另一条气泡:打断旧任务,开新任务
+  synth.cancel()
+
+  const utter = new SpeechSynthesisUtterance(cleanText)
+  utter.lang = 'zh-CN'
+  utter.rate = 1
+  utter.pitch = 1
+  utter.volume = 1
+  utter.onend = () => {
+    if (currentUtter === utter) resetSpeechState()
+  }
+  utter.onerror = () => {
+    if (currentUtter === utter) resetSpeechState()
+  }
+
+  currentUtter = utter
+  activeSpeechIndex.value = index
+  isSpeechPaused.value = false
+  synth.speak(utter)
+}
+
+// 离开页面 / 组件销毁时,务必把声音掐掉,避免后台还在念
+onUnmounted(() => {
+  if (hasSpeech) {
+    window.speechSynthesis.cancel()
+  }
+  resetSpeechState()
+})
 
 const SENSITIVE_WORDS = ['转账', '安全账户', '验证码', '刷单', '中奖', '贷款', '裸聊']
 
@@ -387,6 +496,7 @@ async function scrollToBottom() {
   font-weight: 400;
   backdrop-filter: blur(12px) saturate(150%);
   -webkit-backdrop-filter: blur(12px) saturate(150%);
+  position: relative;
 }
 
 .user-bubble {
@@ -570,5 +680,65 @@ async function scrollToBottom() {
   text-align: center;
   font-weight: 400;
   letter-spacing: 0.08em;
+}
+
+/* ============ 语音朗读按钮(AI 气泡右下角) ============ */
+.speech-btn {
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid rgba(180, 130, 80, 0.18);
+  background: rgba(255, 255, 255, 0.55);
+  color: #a07b3a;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0.55;
+  transition:
+    opacity 0.2s ease,
+    background 0.2s ease,
+    color 0.2s ease,
+    transform 0.2s cubic-bezier(0.25, 1.5, 0.5, 1),
+    box-shadow 0.2s ease;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+.assistant-bubble:hover .speech-btn,
+.speech-btn:focus-visible {
+  opacity: 1;
+}
+.speech-btn:hover {
+  background: linear-gradient(135deg, rgba(255, 222, 168, 0.9), rgba(255, 196, 130, 0.9));
+  color: #6b3e0a;
+  transform: scale(1.05);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 4px 12px rgba(217, 119, 6, 0.18);
+}
+.speech-btn:active {
+  transform: scale(0.94);
+}
+.speech-btn-active {
+  opacity: 1;
+  background: linear-gradient(135deg, #ffd36a, #f5a524);
+  color: #5b2f04;
+  border-color: rgba(255, 255, 255, 0.85);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 0 0 4px rgba(245, 165, 36, 0.18),
+    0 4px 12px rgba(217, 119, 6, 0.25);
+  animation: speechPulse 1.6s ease-in-out infinite;
+}
+@keyframes speechPulse {
+  0%, 100% { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95), 0 0 0 0 rgba(245, 165, 36, 0.4), 0 4px 12px rgba(217, 119, 6, 0.25); }
+  50%      { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95), 0 0 0 6px rgba(245, 165, 36, 0),    0 4px 12px rgba(217, 119, 6, 0.25); }
+}
+
+/* 给气泡末尾留一点空间,避免文字盖住按钮 */
+.assistant-bubble .msg-text {
+  padding-right: 32px;
 }
 </style>

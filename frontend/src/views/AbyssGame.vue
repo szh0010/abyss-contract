@@ -119,17 +119,11 @@
             </div>
           </div>
 
-          <!-- 警示弹窗 -->
-          <transition name="fade-up">
-            <div v-if="warningMsg" class="warning-pop liquid-glass-danger">
-              <div class="warning-icon">⚠️</div>
-              <div class="warning-body">
-                <h4>反诈预警</h4>
-                <p>{{ warningMsg }}</p>
-              </div>
-              <button class="warning-close" @click="warningMsg = ''" aria-label="关闭">×</button>
-            </div>
-          </transition>
+          <!-- 流式琥珀色玻璃气泡警告(只在第 1 次危险时弹出,平滑撑开) -->
+          <RiskWarningBubble
+            v-model:visible="showWarning"
+            :message="warningText"
+          />
 
           <!-- 选项区:risk 字段对玩家不可见,只展示 text -->
           <transition name="fade-up">
@@ -274,6 +268,7 @@ import { useRouter } from 'vue-router'
 import http from '../services/http'
 import { getUsername } from '../services/http'
 import { toast } from '../services/toast'
+import RiskWarningBubble from '../components/RiskWarningBubble.vue'
 
 const router = useRouter()
 
@@ -397,6 +392,10 @@ const conversationId = ref(null)
 const dangerCount = ref(0)
 const safeCount = ref(0)
 
+// 流式琥珀色玻璃气泡警告(只在 dangerCount === 1 时弹出一次)
+const showWarning = ref(false)
+const warningText = ref('')
+
 const streamRef = ref(null)
 
 const username = computed(() => getUsername() || 'guest')
@@ -469,7 +468,7 @@ function typewriteScammer(fullText) {
   })
 }
 
-async function sendTurn(userMessage, { hidden = false, displayText = null } = {}) {
+async function sendTurn(userMessage, { hidden = false, displayText = null, localCounted = null } = {}) {
   if (isLoading.value) return
   if (!hidden) {
     // 玩家气泡只显示干净文本(displayText),隐藏隐形指令
@@ -482,6 +481,8 @@ async function sendTurn(userMessage, { hidden = false, displayText = null } = {}
 
   isLoading.value = true
   currentOptions.value = []   // 隐藏底部按钮,直到 AI 打字结束
+  // 玩家点了下一项,先把上一回合留着的预警气泡收起来
+  showWarning.value = false
 
   try {
     const { data } = await http.post('/game/simulate', {
@@ -493,44 +494,58 @@ async function sendTurn(userMessage, { hidden = false, displayText = null } = {}
       conversationId.value = data.conversation_id
     }
 
-    const result = ['playing', 'win', 'lose'].includes(data?.game_result)
-      ? data.game_result
-      : (data?.is_game_over ? 'lose' : 'playing')
+    // —— 新协议字段 ——
+    const reply = String(data?.reply || data?.scammer_message || '').trim()
+    const analysis = String(data?.analysis_message || '').trim()
+    const isDangerous = !!data?.is_dangerous
+    const isSafe = !!data?.is_safe
+    const serverResult = String(data?.game_result || '').toLowerCase()
 
     // 三点 typing 指示器先撤掉,让位给真·打字机
     isLoading.value = false
 
-    const sm = (data?.scammer_message || '').trim()
-    if (sm) {
-      await typewriteScammer(sm)
+    if (reply) {
+      await typewriteScammer(reply)
     }
 
-    if (result === 'playing') {
-      gameResult.value = 'playing'
-      reportData.value = ''
-      // 打字结束后再弹按钮 + 警告
-      currentOptions.value = Array.isArray(data?.options) ? data.options : []
-      if (data?.warning_pop) {
-        warningMsg.value = String(data.warning_pop)
-        toast.warning(String(data.warning_pop))
-      }
-    } else if (result === 'win') {
-      gameResult.value = 'win'
-      currentOptions.value = []
-      reportData.value = data?.report || '恭喜你识破了这场骗局,你的反诈直觉非常敏锐。'
-      if (data?.warning_pop) {
-        warningMsg.value = String(data.warning_pop)
-      }
-      await onWin()
-    } else {
+    // —— 后端计分同步:仅在前端没计过分时才追加(双重保险防重复)——
+    if (isDangerous && localCounted !== 'danger') dangerCount.value += 1
+    if (isSafe      && localCounted !== 'safe')   safeCount.value   += 1
+
+    // —— 失败裁决:计分阈值 || 服务端判定 ——
+    if (dangerCount.value >= 2 || serverResult === 'lose') {
       gameResult.value = 'lose'
       currentOptions.value = []
-      reportData.value = data?.report || '很遗憾,这一次落入了陷阱。请记住这次的关键节点,下次一定能挡住。'
-      if (data?.warning_pop) {
-        warningMsg.value = String(data.warning_pop)
-      }
+      reportData.value = analysis
+        || data?.report
+        || '很遗憾,这一次落入了陷阱。请记住这次的关键节点,下次一定能挡住。'
       toast.danger('💔 很遗憾,落入了陷阱')
+      return
     }
+
+    // —— 胜利裁决:计分阈值 || 服务端判定 ——
+    if (safeCount.value >= 3 || serverResult === 'win') {
+      gameResult.value = 'win'
+      currentOptions.value = []
+      reportData.value = analysis
+        || data?.report
+        || '恭喜你识破了这场骗局,你的反诈直觉非常敏锐。'
+      await onWin()
+      return
+    }
+
+    // —— 第 1 次危险:流式琥珀气泡警告 ——
+    if (dangerCount.value === 1 && (isDangerous || localCounted === 'danger')) {
+      warningText.value = analysis
+        || '这一步操作存在风险,再走一步就可能落入陷阱。请提高警惕。'
+      showWarning.value = true
+      toast.warning('⚠️ 实时反诈预警')
+    }
+
+    // —— 仍然进行中:把后端给的选项弹出来 ——
+    gameResult.value = 'playing'
+    reportData.value = ''
+    currentOptions.value = Array.isArray(data?.options) ? data.options : []
   } catch (e) {
     console.error('[AbyssGame] simulate failed', e)
     chatHistory.value.push({
@@ -618,16 +633,20 @@ async function startScript(s) {
   conversationId.value = null
   dangerCount.value = 0
   safeCount.value = 0
+  showWarning.value = false
+  warningText.value = ''
   currentView.value = 'play'
   await nextTick()
   await sendTurn(s.opener, { hidden: true })
 }
 
 /* ============================================================
-   选项点击:前端强制计分 + 隐形指令注入
-   - risk='high' → dangerCount++,达到 2 次必判输
-   - risk='low'  → safeCount++  ,达到 3 次必判赢
-   - 玩家可见的只有 option.text;risk 字段从不渲染
+   选项点击:前端硬控计分 + 隐形指令强制收束(双重保险)
+   1. 玩家点击瞬间,前端按 opt.risk 增计;后端响应里若再来 is_dangerous/is_safe,
+      用 localCounted 标记防止重复计分。
+   2. 命中阈值后,把"系统最高指令"拼到 finalMessage 尾部偷偷发给 AI,
+      让它必须输出对应的 game_result。
+   3. 玩家气泡只渲染 option.text,risk 与隐形指令都不会落到 DOM。
 ============================================================ */
 function optionText(opt) {
   if (typeof opt === 'string') return opt
@@ -643,16 +662,22 @@ function optionRisk(opt) {
 function chooseOption(opt) {
   if (isLoading.value || gameResult.value !== 'playing') return
 
-  // 1. 取出可见文本(发给后端的 user_message 仍以玩家可见的话术为基底)
+  // 1. 取出可见文本(玩家气泡渲染用)
   const text = optionText(opt)
   if (!text) return
 
-  // 2. 计分板更新
+  // 2. 前端硬控计分:点击瞬间立即 ++,标记 localCounted 防止后端重复加
   const risk = optionRisk(opt)
-  if (risk === 'high') dangerCount.value += 1
-  else if (risk === 'low') safeCount.value += 1
+  let localCounted = null
+  if (risk === 'high') {
+    dangerCount.value += 1
+    localCounted = 'danger'
+  } else if (risk === 'low') {
+    safeCount.value += 1
+    localCounted = 'safe'
+  }
 
-  // 3. 拼装 finalMessage:玩家原话 + (可能的)系统最高指令
+  // 3. 隐形指令注入:阈值命中即强制 AI 收束本回合
   let finalMessage = text
   if (dangerCount.value >= 2) {
     finalMessage +=
@@ -663,8 +688,8 @@ function chooseOption(opt) {
       '\n[系统最高指令:玩家已达到3次安全操作!你必须立刻输出 game_result: win 并生成通关 report!]'
   }
 
-  // 4. 走原有打字机 / 胜负面板流水
-  sendTurn(finalMessage, { displayText: text })
+  // 4. 分流发送:user_message=finalMessage(带隐指),气泡=干净 text
+  sendTurn(finalMessage, { displayText: text, localCounted })
 }
 
 function restartCurrent() {
@@ -685,6 +710,10 @@ function backToSelect() {
   lastWinPoints.value = 0
   nextUnlockedHint.value = ''
   conversationId.value = null
+  dangerCount.value = 0
+  safeCount.value = 0
+  showWarning.value = false
+  warningText.value = ''
   activeScript.value = null
 }
 

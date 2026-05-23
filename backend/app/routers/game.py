@@ -361,8 +361,15 @@ class GameOption(BaseModel):
 
 
 class GameSimulateResponse(BaseModel):
-    scammer_message: str
-    options: list[GameOption]
+    # —— 新协议(Coze 提示词强制 4 字段)——
+    reply: str = ""
+    is_dangerous: bool = False
+    is_safe: bool = False
+    analysis_message: str = ""
+
+    # —— 旧协议(向后兼容,可与新协议共存)——
+    scammer_message: str = ""
+    options: list[GameOption] = []
     warning_pop: Optional[str] = None
     is_game_over: bool = False
     game_result: str = "playing"   # "playing" | "win" | "lose"
@@ -388,6 +395,11 @@ def _strip_fences(text: str) -> str:
 
 
 _FALLBACK_PAYLOAD = {
+    "reply": "(AI 暂时离线)系统建议你直接挂断电话,并拨打 96110 反诈专线核实。",
+    "is_dangerous": False,
+    "is_safe": False,
+    "analysis_message": "AI 链路异常,已切换到本地兜底剧本。",
+
     "scammer_message": "(剧本生成异常,AI 暂时离线)系统建议你直接挂断电话,并拨打 96110 反诈专线核实。",
     "options": [
         {"text": "立即挂断并拨打 96110", "risk": "low"},
@@ -434,7 +446,9 @@ def _normalize_options(raw_options) -> list[dict]:
 
 
 def _coerce_payload(raw: dict) -> dict:
-    """对 Coze 返回的字段做形态收敛,前端只面对干净结构。"""
+    """对 Coze 返回的字段做形态收敛,前端只面对干净结构。
+    新协议 4 字段 + 旧协议字段共存,缺失的一律填默认值。
+    """
     options = _normalize_options(raw.get("options") or [])
 
     # 兼容新旧两种字段:优先读 game_result,缺失则从 is_game_over 推断
@@ -444,9 +458,21 @@ def _coerce_payload(raw: dict) -> dict:
 
     is_over = raw_result in ("win", "lose")
 
+    # 新协议 4 字段:reply 为主,旧协议 scammer_message 兜底反过来填
+    reply = str(raw.get("reply") or "").strip()
+    scammer = str(raw.get("scammer_message") or "").strip()
+    if not reply and scammer:
+        reply = scammer
+    if not scammer and reply:
+        scammer = reply
+
     return {
-        "scammer_message": str(raw.get("scammer_message") or "").strip()
-            or "(剧本人物沉默不语......)",
+        "reply": reply or "(剧本人物沉默不语......)",
+        "is_dangerous": bool(raw.get("is_dangerous", False)),
+        "is_safe": bool(raw.get("is_safe", False)),
+        "analysis_message": str(raw.get("analysis_message") or "").strip(),
+
+        "scammer_message": scammer or "(剧本人物沉默不语......)",
         "options": options,
         "warning_pop": (str(raw["warning_pop"]).strip()
                        if raw.get("warning_pop") else None),

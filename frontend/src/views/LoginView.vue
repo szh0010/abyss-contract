@@ -6,7 +6,7 @@
           <div class="brand-mark">
             <span class="mark-dot"></span>
           </div>
-          <div class="brand-name">反诈先锋</div>
+          <div class="brand-name">反诈王牌</div>
           <div class="brand-sub">
             {{ mode === 'login' ? 'Welcome back · 守护每一个正直的你' : '创建账户 · 加入守护者行列' }}
           </div>

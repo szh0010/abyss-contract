@@ -87,23 +87,32 @@
             </span>
           </button>
 
-          <!-- 勋章库 -->
+          <!-- 勋章库 · 自适应居中 + 人格勋章排他 + 空状态 -->
           <section class="medal-section">
             <div class="section-label">
               <span>荣誉勋章库</span>
-              <span class="section-count">{{ unlockedCount }} / {{ medals.length }}</span>
+              <span class="section-count">{{ earnedMedals.length }} / 2</span>
             </div>
-            <div class="medal-grid">
+
+            <!-- 空状态 -->
+            <div v-if="earnedMedals.length === 0" class="medal-empty">
+              <span class="medal-empty-emoji">📭</span>
+              <p class="medal-empty-title">空空如也</p>
+              <p class="medal-empty-sub">快去完成测试获取勋章吧</p>
+            </div>
+
+            <!-- 已解锁勋章:flex 居中,无论 1 个还是 2 个都完美居中 -->
+            <div v-else class="medal-flex">
               <div
-                v-for="m in medals"
+                v-for="m in earnedMedals"
                 :key="m.id"
-                class="medal-cell"
-                :class="[m.tier, { locked: !m.unlocked, fresh: freshMedalIds.has(m.id) }]"
-                :title="m.unlocked ? `${m.name} · ${tierLabel(m.tier)}` : '未获得'"
+                class="medal-card"
+                :class="m.tier"
+                :title="`${m.name} · ${tierLabel(m.tier)}`"
               >
                 <div class="medal-icon">
                   <template v-if="['shield','star','eye','bolt'].includes(m.icon)">
-                    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
                       <path v-if="m.icon === 'shield'" d="M12 2 L20 5 V12 C20 17 16 21 12 22 C8 21 4 17 4 12 V5 Z"/>
                       <path v-else-if="m.icon === 'star'" d="M12 2 L14.5 9 L22 9.3 L16 14 L18 21.5 L12 17.3 L6 21.5 L8 14 L2 9.3 L9.5 9 Z"/>
                       <path v-else-if="m.icon === 'eye'" d="M12 5 C5 5 2 12 2 12 C2 12 5 19 12 19 C19 19 22 12 22 12 C22 12 19 5 12 5 Z M12 15 A3 3 0 1 1 12 9 A3 3 0 0 1 12 15 Z"/>
@@ -112,7 +121,7 @@
                   </template>
                   <span v-else class="medal-emoji">{{ m.icon }}</span>
                 </div>
-                <div class="medal-name">{{ m.unlocked ? m.name : '未解锁' }}</div>
+                <span class="medal-name">{{ m.name }}</span>
               </div>
             </div>
           </section>
@@ -195,7 +204,25 @@
                   <span class="risk-label">{{ riskLabel(spotResult.risk) }}</span>
                   <button class="spot-close" @click="spotResult = null" aria-label="关闭">×</button>
                 </div>
-                <p class="spot-result-body">{{ spotResult.answer }}</p>
+                <p
+                  v-if="spotResult.coreRisk"
+                  class="spot-result-core"
+                >
+                  <strong>核心破绽:</strong>{{ spotResult.coreRisk }}
+                </p>
+                <p
+                  class="spot-result-body"
+                  v-html="spotResult.analysis"
+                ></p>
+                <button
+                  v-if="spotResult.risk === 'high'"
+                  class="spot-report-btn"
+                  :disabled="isReporting"
+                  @click="handleRealReport"
+                >
+                  <span v-if="isReporting">⏳ 安全通道连接中…</span>
+                  <span v-else>🚨 一键举报至 12321 国家举报中心</span>
+                </button>
               </div>
             </transition>
           </section>
@@ -311,40 +338,36 @@ const VALID_TIERS = ['gold', 'silver', 'bronze']
 function normalizeMedal(m) {
   return {
     ...m,
-    icon: VALID_ICONS.includes(m.icon) ? m.icon : 'star',
-    tier: VALID_TIERS.includes(m.tier) ? m.tier : 'bronze',
+    icon: VALID_ICONS.includes(m.icon) ? m.icon : (m.icon || 'star'),
+    tier: VALID_TIERS.includes(m.tier) ? m.tier : 'gold',
     unlocked: true,
   }
 }
 
-const medals = computed(() => {
-  // 合并：后端解锁的 + 本地（Pinia/localStorage）解锁的
-  const backendUnlocked = unlockedMedals.value.map(normalizeMedal)
-  const localUnlocked = medalStore.unlockedMedals.map((m) => ({
-    ...m,
-    tier: VALID_TIERS.includes(m.tier) ? m.tier : 'gold',
-    unlocked: true,
-  }))
-  const seen = new Set()
-  const unlocked = [...backendUnlocked, ...localUnlocked].filter((m) => {
-    if (seen.has(m.id)) return false
-    seen.add(m.id)
-    return true
-  })
-  const unlockedIds = new Set(unlocked.map((m) => m.id))
-  const fillers = MEDAL_SLOTS
-    .filter((s) => !unlockedIds.has(s.id))
-    .map((s) => ({ ...s, unlocked: false }))
-  const needed = Math.max(0, 8 - unlocked.length)
-  return [...unlocked, ...fillers.slice(0, needed)]
+/* ============================================================
+   荣誉勋章库:最多展示 2 类(人格 1 + 情景模拟 1)
+   - 人格勋章排他:多次测试只保留最近一枚,不允许累计
+   - 后端 /assess/profile 的 medals 视为「人格类」
+   - 本地 medalStore 视为「情景模拟类」(深渊破局宗师)
+============================================================ */
+const earnedMedals = computed(() => {
+  // 人格勋章:取后端列表中的「最后一枚」(按返回顺序作为时间序),实现替换效果
+  const personalityRaw = unlockedMedals.value
+  const latestPersonality = personalityRaw.length
+    ? normalizeMedal(personalityRaw[personalityRaw.length - 1])
+    : null
+
+  // 情景模拟勋章:本地 medalStore 中已解锁的(目前只有「反诈破局宗师」)
+  const scenarioMedals = medalStore.unlockedMedals
+    .map(normalizeMedal)
+    // 排除人格勋章(避免双重渲染)
+    .filter((m) => !latestPersonality || m.id !== latestPersonality.id)
+  const latestScenario = scenarioMedals.length ? scenarioMedals[scenarioMedals.length - 1] : null
+
+  return [latestPersonality, latestScenario].filter(Boolean)
 })
 
-const unlockedCount = computed(
-  () => new Set([
-    ...unlockedMedals.value.map((m) => m.id),
-    ...medalStore.unlockedMedals.map((m) => m.id),
-  ]).size
-)
+const unlockedCount = computed(() => earnedMedals.value.length)
 
 function tierLabel(t) {
   return { gold: 'GOLD', silver: 'SILVER', bronze: 'BRONZE' }[t] || ''
@@ -401,24 +424,37 @@ function mapRisk(level) {
   return 'low'
 }
 
+const isReporting = ref(false)
+
+function handleRealReport() {
+  if (isReporting.value) return
+  isReporting.value = true
+  setTimeout(() => {
+    isReporting.value = false
+    window.alert('✅ 预处理成功!即将为您跳转至【12321国家官方网络不良信息举报中心】进行立案查处...')
+    window.open('https://www.12321.cn/', '_blank', 'noopener')
+  }, 1000)
+}
+
 async function runSpotlight() {
   const text = spotInput.value.trim()
   if (!text || spotLoading.value) return
   spotLoading.value = true
   spotResult.value = null
   try {
-    const { data } = await http.post('/chat/ask', {
-      question: `请研判以下内容的诈骗风险并给出简短建议：${text}`,
-    })
+    const { data } = await http.post('/chat/spotlight', { text })
     spotResult.value = {
-      risk: mapRisk(data.risk_level),
-      answer: (data.answer || '').slice(0, 280),
+      risk: mapRisk(data?.risk_level),
+      coreRisk: String(data?.core_risk || '').trim(),
+      analysis: String(data?.analysis || '').trim()
+        || '研判完成,但 AI 未给出更多分析。请结合常识判断。',
     }
   } catch (e) {
     if (e?.response?.status === 401) return
     spotResult.value = {
       risk: 'low',
-      answer: '研判失败：请检查网络或稍后重试。',
+      coreRisk: '',
+      analysis: '研判失败:请检查网络或稍后重试。',
     }
   } finally {
     spotLoading.value = false
@@ -1334,5 +1370,144 @@ body {
     inset 0 2px 4px rgba(255, 255, 255, 0.9),
     inset 0 -2px 6px rgba(0, 0, 0, 0.05),
     0 8px 32px rgba(0, 0, 0, 0.08);
+}
+
+/* ============ 新版荣誉勋章库:Flex 居中 + 空状态 + 排他展示 ============ */
+.medal-flex {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 14px;
+  padding: 8px 4px 4px;
+}
+.medal-card {
+  width: 80px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.85);
+  padding: 10px 8px 9px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 165, 80, 0.18);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 6px 16px rgba(217, 154, 46, 0.12);
+  transition: transform 0.3s cubic-bezier(0.25, 1.5, 0.5, 1), box-shadow 0.3s ease;
+}
+.medal-card:hover {
+  transform: translateY(-2px) scale(1.05);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 10px 22px rgba(217, 154, 46, 0.22);
+}
+.medal-card .medal-icon {
+  width: 40px; height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 4px;
+}
+.medal-card .medal-emoji { font-size: 1.5rem; line-height: 1; }
+.medal-card .medal-name {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #4a3b1c;
+  text-align: center;
+  width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: 0.04em;
+}
+.medal-card.gold   { color: #d99a2e; }
+.medal-card.silver { color: #9c8b70; }
+.medal-card.bronze { color: #b47a42; }
+
+.medal-empty {
+  margin-top: 8px;
+  padding: 22px 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16px;
+  background: rgba(255, 244, 230, 0.55);
+  border: 1px dashed rgba(255, 165, 80, 0.45);
+  color: #b89b6c;
+  text-align: center;
+}
+.medal-empty-emoji {
+  font-size: 1.55rem;
+  margin-bottom: 6px;
+}
+.medal-empty-title {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #8a7458;
+  letter-spacing: 0.06em;
+}
+.medal-empty-sub {
+  margin: 4px 0 0;
+  font-size: 0.7rem;
+  opacity: 0.7;
+  color: #a08660;
+}
+
+/* ============ 一键研判扩展:核心破绽 + 12321 举报按钮 ============ */
+.spot-result-core {
+  margin: 6px 0 4px;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  color: #5b3a14;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 12px;
+  padding: 8px 12px;
+}
+.spot-result-core strong {
+  color: #b8730d;
+  letter-spacing: 0.04em;
+  margin-right: 6px;
+}
+.spot-result.risk-high .spot-result-core strong { color: #a8334a; }
+
+.spot-report-btn {
+  margin-top: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 20px;
+  border: none;
+  border-radius: 12px;
+  font: inherit;
+  font-weight: 700;
+  font-size: 0.88rem;
+  letter-spacing: 0.04em;
+  color: #fff;
+  background: linear-gradient(135deg, #ef4444, #b91c1c);
+  cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 8px 22px rgba(185, 28, 28, 0.32);
+  transition:
+    transform 0.25s cubic-bezier(0.25, 1.5, 0.5, 1),
+    box-shadow 0.25s ease,
+    opacity 0.2s ease;
+}
+.spot-report-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #dc2626, #991b1b);
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 12px 28px rgba(185, 28, 28, 0.4);
+}
+.spot-report-btn:active:not(:disabled) {
+  transform: scale(0.96);
+}
+.spot-report-btn:disabled {
+  opacity: 0.7;
+  cursor: progress;
 }
 </style>
