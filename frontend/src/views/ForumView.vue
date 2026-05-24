@@ -21,7 +21,7 @@
       <textarea
         v-model="newPostContent"
         class="composer-input"
-        placeholder="分享你的防骗经历… 经验越具体，越能帮到别人"
+        placeholder="分享你的防骗经历… 文字或图片至少留一个就能发布"
         maxlength="2000"
         :disabled="submitting"
       ></textarea>
@@ -92,11 +92,17 @@
               title="删除我的发布"
             >删除</button>
           </header>
-          <p class="post-content">{{ post.content }}</p>
+          <p v-if="post.content" class="post-content">{{ post.content }}</p>
 
           <!-- 配图（如果有） -->
           <div v-if="post.image_path" class="post-image-wrap">
-            <img :src="post.image_path" class="post-image" alt="附图" loading="lazy" />
+            <img
+              :src="post.image_path"
+              class="post-image"
+              alt="附图"
+              loading="lazy"
+              @click="openImagePreview(post.image_path)"
+            />
           </div>
 
           <!-- 互动条：点赞 + 评论 -->
@@ -171,12 +177,40 @@
       </p>
       <p v-if="loading" class="empty">加载中…</p>
     </section>
+
+    <!-- ====== 图片 Lightbox（Teleport 到 body 脱离父级滚动容器） ====== -->
+    <Teleport to="body">
+      <transition name="lightbox-fade">
+        <div
+          v-if="previewImageUrl"
+          class="lightbox-overlay"
+          @click="closeImagePreview"
+        >
+          <button
+            class="lightbox-close"
+            type="button"
+            aria-label="关闭预览"
+            @click.stop="closeImagePreview"
+          >
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+              <path d="M6 6l12 12M18 6L6 18"/>
+            </svg>
+          </button>
+          <img
+            :src="previewImageUrl"
+            class="lightbox-image"
+            alt="预览大图"
+            @click.stop
+          />
+        </div>
+      </transition>
+    </Teleport>
   </div>
 </template>
 
 <!-- script -->
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import http from '../services/http'
 import { toast } from '../services/toast'
 
@@ -188,10 +222,24 @@ const submitting = ref(false)
 const uploading = ref(false)
 const fileInputEl = ref(null)
 
+/* ===== 图片 Lightbox（点击放大预览） ===== */
+const previewImageUrl = ref(null)
+
+function openImagePreview(url) {
+  if (!url) return
+  previewImageUrl.value = url
+  document.body.style.overflow = 'hidden'
+}
+
+function closeImagePreview() {
+  previewImageUrl.value = null
+  document.body.style.overflow = ''
+}
+
 const canSubmit = computed(
   () => !submitting.value
     && !uploading.value
-    && newPostContent.value.trim().length > 0
+    && (newPostContent.value.trim().length > 0 || !!newImagePath.value)
 )
 
 /* 把后端 PostOut 注水成前端可状态化的对象（带评论草稿等本地态） */
@@ -260,6 +308,10 @@ async function onFileSelected(e) {
 async function submitPost() {
   if (!canSubmit.value) return
   const content = newPostContent.value.trim()
+  if (!content && !newImagePath.value) {
+    toast.warning('文字或图片至少要有一个')
+    return
+  }
   submitting.value = true
   try {
     const { data } = await http.post('/forum/posts', {
@@ -371,6 +423,11 @@ async function deleteComment(post, commentId) {
 }
 
 onMounted(refresh)
+
+/* 防止离开页面时 body 卡在 hidden 状态 */
+onBeforeUnmount(() => {
+  document.body.style.overflow = ''
+})
 </script>
 <!-- style -->
 <style scoped>
@@ -666,6 +723,12 @@ onMounted(refresh)
   width: 100%;
   max-height: 420px;
   object-fit: cover;
+  cursor: zoom-in;
+  transition: transform 0.4s cubic-bezier(0.22, 1, 0.36, 1), filter 0.3s ease;
+}
+.post-image:hover {
+  transform: scale(1.01);
+  filter: brightness(1.03);
 }
 
 /* ============ 互动条 ============ */
@@ -798,5 +861,81 @@ onMounted(refresh)
   cursor: pointer;
 }
 .comment-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ============ 图片 Lightbox 全屏预览 ============ */
+.lightbox-overlay {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  box-sizing: border-box;
+  background: rgba(0, 0, 0, 0.9);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  cursor: zoom-out;
+}
+.lightbox-image {
+  position: relative;
+  z-index: 10000;
+  max-width: 85vw;
+  max-height: 85vh;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  margin: auto;
+  border-radius: 12px;
+  cursor: default;
+  box-shadow:
+    0 25px 50px -12px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(255, 255, 255, 0.06);
+  animation: lightboxPop 0.38s cubic-bezier(0.25, 1.5, 0.5, 1);
+}
+@keyframes lightboxPop {
+  from { opacity: 0; transform: scale(0.94); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.lightbox-close {
+  position: absolute;
+  top: 24px;
+  right: 26px;
+  z-index: 10000;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  transition: transform 0.3s cubic-bezier(0.25, 1.5, 0.5, 1),
+              background 0.2s ease,
+              border-color 0.2s ease;
+}
+.lightbox-close:hover {
+  background: rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 255, 255, 0.4);
+  transform: scale(1.08) rotate(90deg);
+}
+.lightbox-close:active {
+  transform: scale(0.92) rotate(90deg);
+}
+
+.lightbox-fade-enter-active,
+.lightbox-fade-leave-active {
+  transition: opacity 0.28s ease;
+}
+.lightbox-fade-enter-from,
+.lightbox-fade-leave-to {
+  opacity: 0;
+}
 </style>
 

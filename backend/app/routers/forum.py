@@ -40,7 +40,7 @@ MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB
 
 # ===== Schemas =====
 class PostCreate(BaseModel):
-    content: str = Field(..., min_length=1, max_length=2000)
+    content: str = Field(default="", max_length=2000)
     image_path: Optional[str] = Field(default=None, max_length=255)
 
 
@@ -209,11 +209,16 @@ async def create_post(
     current: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    content = (body.content or "").strip()
+    image_path = (body.image_path or "").strip() or None
+    if not content and not image_path:
+        raise HTTPException(status_code=400, detail="文字或图片至少要有一个")
+
     post = Post(
         user_id=current.id,
         author_name=current.username,
-        content=body.content,
-        image_path=body.image_path,
+        content=content,
+        image_path=image_path,
     )
     db.add(post)
     await db.flush()
